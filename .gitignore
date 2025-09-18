@@ -1,0 +1,13 @@
+*.session*
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+.env
+*.sqlite*
+.env*
+metrics.json
+queue.db
+subscriptions.json

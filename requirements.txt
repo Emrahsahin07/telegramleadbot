@@ -1,0 +1,10 @@
+python-dotenv
+telethon
+openai
+rapidfuzz
+flask
+aiofiles
+tenacity
+snowballstemmer==3.0.1
+requests>=2.31.0
+aiosqlite

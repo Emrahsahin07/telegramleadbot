@@ -1,0 +1,40 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.log
+*.sqlite3
+*.db
+*.db-journal
+
+# Virtualenv directories
+.env/
+venv/
+.venv/
+ENV/
+
+# Git and editor artifacts
+.git/
+.gitignore
+*.swp
+*.swo
+*.bak
+.DS_Store
+
+# Secrets / runtime state
+.env
+.env.*
+*.session*
+*.session
+*.session-journal
+bot_parser.session
+bot_session*.session
+bot_session*.session-journal
+queue.db
+feedback.db
+ai_tokens.log
+ai_rejected.log
+ai_discarded.log
+ai_review.log
+ai_trainer.pyc

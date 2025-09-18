@@ -1,0 +1,1 @@
+{"messages": [{"role": "system", "content": "You are a lead classification AI. Classify messages as relevant leads or not."}, {"role": "user", "content": "Classify this message: нужна срочная страховка!"}, {"role": "assistant", "content": "{\"relevant\": true, \"category\": \"страховки\", \"region\": \"Анталия\", \"confidence\": 0.95}"}]}

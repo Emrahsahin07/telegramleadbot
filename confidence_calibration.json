@@ -1,0 +1,20 @@
+{
+  "0-0.5": {
+    "count": 7,
+    "accuracy": 1.0,
+    "false_negatives": 0,
+    "false_positives": 0
+  },
+  "0.7-0.8": {
+    "count": 1,
+    "accuracy": 0.0,
+    "false_negatives": 0,
+    "false_positives": 1
+  },
+  "0.8-1.01": {
+    "count": 31,
+    "accuracy": 0.967741935483871,
+    "false_negatives": 0,
+    "false_positives": 1
+  }
+}
