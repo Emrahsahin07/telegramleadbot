@@ -162,7 +162,7 @@ async def handle_review_callback(event):
             sender_username = lead.get("sender_username", "")
             sender_id = lead.get("sender_id", 0)
             display_name = f"@{sender_username}" if sender_username else "Проверено админом"
-            await send_lead_to_users(
+            sent_uids, failed_uids = await send_lead_to_users(
                 chat_id=chat_id,
                 group_name=group_name,
                 group_username=None,
@@ -178,6 +178,7 @@ async def handle_review_callback(event):
                 route=lead.get("route"),
                 confidence=lead.get("confidence", 0.9)  # Admin-approved leads should have high confidence
             )
+            logger.info(f"REVIEW_SENT | users={len(sent_uids)} failed={len(failed_uids)} | lead={lead_id}")
             await event.answer("✅ Лид одобрен и отправлен пользователям!")
             # Удаляем сообщение
             try:

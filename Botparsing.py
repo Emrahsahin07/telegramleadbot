@@ -43,7 +43,7 @@ def now_istanbul():
     return datetime.now(timezone.utc) + timedelta(hours=3)
 
 import keep_alive  # стартует Flask-сервер для keep-alive
-from ai_utils import classify_text_with_ai, _classify_cache, apply_overrides, update_categories
+from ai_utils2 import classify_text_with_ai, _classify_cache, apply_overrides, update_categories
 from connection_manager import add_telegram_client, connect_all_clients, start_connection_monitoring, disconnect_all_clients
 
 import openai
@@ -76,6 +76,9 @@ import atexit
 
 # --- Unified logging helper ---
 def log_evt(code, *, chat_id=None, group_name=None, region=None, cat=None, conf=None, kw=None, msg=None, extra=None):
+    if code == 'DROP_AD':
+        return
+
     parts = [code]
     if chat_id is not None:
         if group_name:
@@ -98,6 +101,12 @@ def log_evt(code, *, chat_id=None, group_name=None, region=None, cat=None, conf=
     if extra:
         parts.append(str(extra))
     return " | ".join(parts)
+
+
+def log_info_event(code, **kwargs):
+    line = log_evt(code, **kwargs)
+    if line:
+        logger.info(line)
 
 # Persist metrics to JSON on shutdown
 def dump_metrics():
@@ -136,7 +145,7 @@ if not bot_token:
 # ADMIN_ID moved to config.py
 
 # Initialize OpenAI client after API key is loaded (bounded timeouts)
-from ai_utils import get_openai_client
+from ai_utils2 import get_openai_client
 client_ai = get_openai_client()
 
 from config import LOCATION_ALIAS
@@ -342,7 +351,7 @@ async def process_message(event):
     # Pre-filter real estate ads to save AI calls
     if is_advertisement(text):
         metrics['pre_ad_filtered'] += 1
-        logger.info(log_evt("DROP_AD", chat_id=chat_id, msg=(text or "")[:180]))
+        log_info_event("DROP_AD", chat_id=chat_id, msg=(text or "")[:180])
         return
     # Lowercase text for matching
     # Pre‑compute set of stems in the message for fast membership test
@@ -507,7 +516,9 @@ async def process_message(event):
         logger.debug("Drop: no category match for users")
         return
     matched_cat = stem_to_category.get(matched_stem, "?")
-    logger.info(log_evt("KW", chat_id=chat_id, group_name=group_name, kw=matched_stem, cat=matched_cat, msg=text[:180]))
+    kw_log = log_evt("KW", chat_id=chat_id, group_name=group_name, kw=matched_stem, cat=matched_cat, msg=text[:180])
+    if kw_log:
+        logger.debug(kw_log)
 
     # ВРЕМЕННО ОТКЛЮЧЕНО: проверка TOP-level keywords
     # if not any(s in stems_in_text for s in parent_category_stems):
@@ -529,8 +540,9 @@ async def process_message(event):
     ]
     
     lower_clean_text = clean_text.lower()
-    question_mark = "?" in lower_clean_text
-    has_buyer_request = any(trigger in lower_clean_text for trigger in buyer_triggers) or question_mark
+    buyer_trigger_hit = any(trigger in lower_clean_text for trigger in buyer_triggers)
+    question_mark = lower_clean_text.count('?') >= 2
+    has_buyer_request = buyer_trigger_hit or question_mark
     has_offer = any(term in lower_clean_text for term in offer_terms)
     has_review = any(term in lower_clean_text for term in review_terms)
 
@@ -541,7 +553,7 @@ async def process_message(event):
     ))
     if excursion_markers and contains_contact(lower_clean_text) and not has_buyer_request:
         metrics['pre_offer_filtered'] += 1
-        logger.info(log_evt("DROP_OFFER", chat_id=chat_id, group_name=group_name, msg=text[:180]))
+        log_info_event("DROP_OFFER", chat_id=chat_id, group_name=group_name, msg=text[:180])
         return
 
     # Targeted filter: transfer service promos with contact but no buyer request
@@ -551,7 +563,7 @@ async def process_message(event):
     ))
     if transfer_markers and contains_contact(lower_clean_text) and not has_buyer_request:
         metrics['pre_offer_filtered'] += 1
-        logger.info(log_evt("DROP_OFFER", chat_id=chat_id, group_name=group_name, msg=text[:180]))
+        log_info_event("DROP_OFFER", chat_id=chat_id, group_name=group_name, msg=text[:180])
         return
 
     # Soft gate for AI: if no top keywords and no buyer signal, drop early
@@ -562,13 +574,13 @@ async def process_message(event):
     # Если в сообщении есть предложение услуги, но нет запроса - отсекаем
     if has_offer and not has_buyer_request:
         metrics['pre_offer_filtered'] += 1
-        logger.info(log_evt("DROP_OFFER", chat_id=chat_id, group_name=group_name, msg=text[:180]))
+        log_info_event("DROP_OFFER", chat_id=chat_id, group_name=group_name, msg=text[:180])
         return
         
     # Если в сообщении есть отзыв, но нет запроса - отсекаем
     if has_review and not has_buyer_request:
         metrics['pre_review_filtered'] += 1
-        logger.info(log_evt("DROP_REVIEW", chat_id=chat_id, group_name=group_name, msg=text[:180]))
+        log_info_event("DROP_REVIEW", chat_id=chat_id, group_name=group_name, msg=text[:180])
         return
         
     # Если совсем нет никаких признаков запроса - отсекаем
@@ -579,7 +591,7 @@ async def process_message(event):
         
         if not has_potential_trigger:
             metrics['pre_no_trigger_filtered'] += 1
-            logger.info(log_evt("DROP_NOTRIGGER", chat_id=chat_id, group_name=group_name, msg=text[:180]))
+            log_info_event("DROP_NOTRIGGER", chat_id=chat_id, group_name=group_name, msg=text[:180])
             return
 
     # Ограничиваем длину текста для AI до 400 символов для предотвращения обрезки ответа
@@ -594,7 +606,7 @@ async def process_message(event):
     # Единственный AI‑чек: классификация (включает определение релевантности)
 
     # --- AI_CALL log ---
-    logger.info(
+    logger.debug(
         "AI_CALL | chat=%s (%s) | cat=%s | msg=%r",
         chat_id, group_name, category_heuristic, ai_input_text[:180]
     )
@@ -621,7 +633,7 @@ async def process_message(event):
             timeout=ai_timeout
         )
         # --- AI_OK log ---
-        logger.info(
+        logger.debug(
             "AI_OK | chat=%s (%s) | conf=%.2f | cat=%s | region=%s | exp=%r",
             chat_id, group_name,
             (cla or {}).get("confidence", 0.0),
@@ -663,7 +675,15 @@ async def process_message(event):
     # Drop if no response or not relevant, with debug explanation
     if not cla or not cla.get("relevant", False):
         metrics['ai_dropped'] += 1
-        logger.info(log_evt("DROP_AI", chat_id=chat_id, group_name=group_name, cat=(cla or {}).get('category'), conf=(cla or {}).get('confidence'), msg=text[:180], extra=f"exp='{(cla or {}).get('explanation')}'"))
+        log_info_event(
+            "DROP_AI",
+            chat_id=chat_id,
+            group_name=group_name,
+            cat=(cla or {}).get('category'),
+            conf=(cla or {}).get('confidence'),
+            msg=text[:180],
+            extra=f"exp='{(cla or {}).get('explanation')}'",
+        )
         # Append to ai_rejected.log with classification details and concise timestamp
         try:
             ts = now_istanbul().strftime("%m-%d %H:%M")
@@ -684,7 +704,15 @@ async def process_message(event):
     confidence = cla.get("confidence", 0.0)
     if confidence < DISCARD_THRESHOLD:
         metrics['discarded_low_confidence'] += 1
-        logger.info(log_evt("DISCARD", chat_id=chat_id, group_name=group_name, cat=cla.get('category'), conf=confidence, msg=text[:180], extra=f"exp='{cla.get('explanation')}'"))
+        log_info_event(
+            "DISCARD",
+            chat_id=chat_id,
+            group_name=group_name,
+            cat=cla.get('category'),
+            conf=confidence,
+            msg=text[:180],
+            extra=f"exp='{cla.get('explanation')}'",
+        )
         # Append to ai_discarded.log for later analysis
         try:
             ts = now_istanbul().strftime("%m-%d %H:%M")
@@ -717,7 +745,15 @@ async def process_message(event):
             )
             return
         metrics['low_confidence'] += 1
-        logger.info(log_evt("REVIEW", chat_id=chat_id, group_name=group_name, cat=cla.get('category'), conf=confidence, msg=text[:180], extra=f"exp='{cla.get('explanation')}'"))
+        log_info_event(
+            "REVIEW",
+            chat_id=chat_id,
+            group_name=group_name,
+            cat=cla.get('category'),
+            conf=confidence,
+            msg=text[:180],
+            extra=f"exp='{cla.get('explanation')}'",
+        )
         
         # Initialize variables that will be used later
         ts = now_istanbul().strftime("%m-%d %H:%M")
@@ -792,9 +828,6 @@ async def process_message(event):
             )
             return
 
-    # Log relevant classification
-    logger.info(log_evt("SENT", chat_id=chat_id, group_name=group_name, region=cla.get('region'), cat=cla.get('category'), conf=cla.get('confidence'), kw=matched_stem, msg=text[:180], extra=f"exp='{cla.get('explanation')}'"))
-    
     # Дополнительное логирование для анализа точности
     if cla.get('confidence', 0.0) < CONF_THRESHOLD:
         logger.warning(
@@ -829,15 +862,15 @@ async def process_message(event):
     ]
     if not subs_target:
         metrics['no_subscribers_for_region'] += 1
-        logger.info(log_evt(
+        log_info_event(
             "DROP_NOSUBS",
             chat_id=chat_id,
             group_name=group_name,
-            region=",".join([str(r) for r in target_regions if r]) or None
-        ))
+            region=",".join([str(r) for r in target_regions if r]) or None,
+        )
         return
 
-    await send_lead_to_users(
+    sent_uids, failed_uids = await send_lead_to_users(
         chat_id=chat_id,
         group_name=group_name,
         group_username=getattr(dialog, "username", None),
@@ -853,6 +886,26 @@ async def process_message(event):
         route=route,
         confidence=cla.get("confidence", 0.9)  # Pass confidence level
     )
+
+    sent_count = len(sent_uids)
+    extra_info = f"exp='{cla.get('explanation')}' sent={sent_count}"
+    if sent_count and failed_uids:
+        extra_info += f" failed={len(failed_uids)}"
+    sent_log = log_evt(
+        "SENT",
+        chat_id=chat_id,
+        group_name=group_name,
+        region=cla.get('region'),
+        cat=cla.get('category'),
+        conf=cla.get('confidence'),
+        kw=matched_stem,
+        msg=text[:180],
+        extra=extra_info,
+    )
+    if sent_log:
+        logger.info(sent_log)
+    if failed_uids:
+        logger.warning(f"Lead send failures: {failed_uids}")
 
 # Global variables for bot identity (moved here from later in file)
 
@@ -940,7 +993,7 @@ async def watch_categories():
             stat = os.stat("categories.json")
             if stat.st_mtime > last_mtime:
                 last_mtime = stat.st_mtime
-                from ai_utils import update_categories
+                from ai_utils2 import update_categories
                 update_categories()
             await asyncio.sleep(5)
         except Exception as e:
@@ -957,7 +1010,7 @@ async def main():
         await message_queue.init_db()
         
         # Обновляем категории
-        from ai_utils import update_categories
+        from ai_utils2 import update_categories
         update_categories()
 
         # Наблюдение за categories.json

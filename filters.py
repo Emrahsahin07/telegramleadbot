@@ -13,7 +13,7 @@ filters.py
 from typing import Any, List, Union
 import re
 from config import LOCATION_ALIAS
-from constants import BUYER_TRIGGERS
+from constants import BUYER_TRIGGERS, SELLER_TERMS, OFFER_TERMS, REALTY_HINT_TERMS, PROMO_CTA_TERMS
 from rapidfuzz import fuzz
 import logging
 
@@ -122,38 +122,26 @@ def _contains_word(haystack: str, needle: str) -> bool:
     return bool(re.search(pattern, haystack, flags=re.IGNORECASE))
 
 # ---------- Advertisement detection ---------------------------------------
+_PRICE_REGEX = re.compile(
+    r"\b\d+(?:[\.,]\d+)?\s?(?:€|eur|евро|usd|\$|доллар|₺|try)(?:\b|[/\-]?[а-яa-z]{0,8})",
+    flags=re.IGNORECASE
+)
+
 _AD_PATTERNS = [
     r"(\+?\d[\d\-\s\(\)]{6,}\d)",       # телефон
-    r"\b\d+(\s?)(€|\$|₺|евро|usd)\b",   # цена + валюта
+    _PRICE_REGEX,                                # цена + валюта (включая €/сутки и т.п.)
 ]
 
-_SELLER_TERMS = [
-    # явные продавцы/арендодатели
-    "сдаётся", "сдается", "сдаю", "сдам", "продажа", "продаю", "продам", "продаём",
-    # коммерческие маркеры
-    "комиссия", "депозит", "каталог", "прайс", "бронь", "в наличии", "варианты", "вариантов",
-    "цена снижена", "акция", "скидка", "без посредников", "риэлтор", "агентств", "риелтор", "посредник"
-]
+_SELLER_TERMS = SELLER_TERMS
 
 # Реалестейт-хинты и паттерны планировок/площади
-_REALTY_HINTS = [
-    "квартира", "апартамент", "апартаменты", "дуплекс", "студия", "резиденс", "комплекс",
-    "санузел", "сан/узел", "балкон", "терраса", "мебель", "меблирован", "без мебели", "айдат", "🔥"
-]
+_REALTY_HINTS = REALTY_HINT_TERMS
 
 _LAYOUT_REGEX = re.compile(r"\b[1-5]\s*([+xх])\s*[0-5]\b")
 _AREA_REGEX = re.compile(r"\b(кв\.?\s?м|м2|м\^2|м²|sqm|sq\s?m)\b", flags=re.IGNORECASE)
 
 # Дополнительные паттерны для фильтрации
-_OFFER_TERMS = [
-    "предлагаю", "предложу", "готов", "готова", "специалист", "профессионал", "мастер", 
-    "оказываю услуги", "предоставляю услуги", "работаю", "занимаюсь", "выполняю", "делаю",
-    "услуги", "service", "services",
-    # CTA/маркетинговые и сервисные маркеры
-    "под ключ", "бесплатный замер", "замер", "оставить заявку", "оставьте заявку",
-    "пиши в личк", "напиши в личк", "написать в личк", "монтаж", "монтажники",
-    "договор", "менеджер", "менеджеры", "качество", "остеклен"
-]
+_OFFER_TERMS = OFFER_TERMS
 
 _REVIEW_TERMS = [
     "отлично", "хорошо", "плохо", "ужасно", "не рекомендую", "рекомендую", "советую", 
@@ -168,7 +156,10 @@ def is_advertisement(text: str) -> bool:
     """
     text_low = text.lower()
     has_contact = contains_contact(text_low)
-    has_price_or_currency = any(re.search(pat, text_low) for pat in _AD_PATTERNS)
+    has_price_or_currency = any(
+        (pat.search(text_low) if hasattr(pat, "search") else re.search(pat, text_low))
+        for pat in _AD_PATTERNS
+    )
     has_seller_terms = any(term in text_low for term in _SELLER_TERMS)
     has_layout = bool(_LAYOUT_REGEX.search(text_low))
     has_area = bool(_AREA_REGEX.search(text_low))
@@ -188,12 +179,20 @@ def is_advertisement(text: str) -> bool:
 
     sellerish = has_seller_terms or has_price_or_currency or has_layout or has_area or has_realty_hint
 
+    price_hits = len(_PRICE_REGEX.findall(text_low))
+    emoji_sections = text_low.count("🌟") + text_low.count("🌴") + text_low.count("✨")
+    promo_cta_hits = sum(text_low.count(term) for term in PROMO_CTA_TERMS)
+
     # Базовые правила отсечения объявлений
     if (has_contact and (sellerish or many_hashtags)):
         return True
     if has_price_or_currency and (sellerish or has_contact or many_hashtags):
         return True
     if has_seller_terms and (has_contact or has_price_or_currency or many_hashtags or has_realty_hint):
+        return True
+
+    # Дополнительные маркеры многообъектных листингов
+    if (price_hits >= 2 or emoji_sections >= 2 or promo_cta_hits >= 2) and not has_buyer:
         return True
 
     # Длинные описания-листинги без вопросительных слов — почти наверняка реклама

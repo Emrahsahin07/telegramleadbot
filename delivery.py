@@ -83,6 +83,7 @@ async def send_lead_to_users(
     if not _send_enabled():
         logger.info("[DEV] Delivery disabled; skipping notifications")
         return
+    sent_uids: list[int] = []
     failed_uids = []
     # Send to each user based on their subscriptions
     for uid_str, prefs in subscriptions.items():
@@ -231,7 +232,7 @@ async def send_lead_to_users(
             cats = prefs.get("categories", [])
             ai_category_tag = f"#{cats[0].lower()}" if cats else ""
         msg = (
-            f"📩 {group_display} | {display_sender}\n\n"
+            f"📩📩📩 {group_display} | {display_sender}\n\n"
             f"- {safe_text}\n\n"
             f"{region_tag} {ai_category_tag}".strip()
         )
@@ -253,8 +254,7 @@ async def send_lead_to_users(
                 link_preview=False,
                 buttons=buttons  # ← Используем кнопки с feedback
             )
-            
-            logger.info(f"SENT-> user={uid} confidence={confidence:.2f}")
+            sent_uids.append(uid)
         except Exception as e:
             metrics['send_errors'] += 1
             failed_uids.append(uid)
@@ -273,3 +273,5 @@ async def send_lead_to_users(
             )
         except Exception as notify_error:
             logger.error(f"Failed to notify admin about send errors: {notify_error}")
+
+    return sent_uids, failed_uids
