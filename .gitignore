@@ -11,3 +11,4 @@ __pycache__/
 metrics.json
 queue.db
 subscriptions.json
+feedback.db
