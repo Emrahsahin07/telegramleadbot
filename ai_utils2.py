@@ -17,20 +17,33 @@ import requests
 from dotenv import load_dotenv
 
 from config import logger
-from ai_utils import apply_overrides, update_categories  # reuse existing heuristics
+from ai_utils import (
+    apply_overrides,
+    update_categories,
+    classify_text_with_ai as _classify_with_openai,
+    get_openai_client as _get_openai_client,
+)  # reuse existing heuristics
 
 load_dotenv()
 
 def get_openai_client():
-    """Compatibility shim returning None; kept for legacy imports."""
-    return None
+    """Return an OpenAI client for fallback flows; keep legacy signature."""
+    try:
+        return _get_openai_client()
+    except Exception as exc:
+        logger.warning("OPENAI_CLIENT_INIT_FAILED: %s", exc)
+        return None
 
 
 OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4-fast:free")
+OPENROUTER_DEEPSEEK_URL = os.getenv("OPENROUTER_DEEPSEEK_URL", OPENROUTER_URL)
+OPENROUTER_DEEPSEEK_MODEL = os.getenv("OPENROUTER_DEEPSEEK_MODEL", "deepseek/deepseek-chat-v3.1:free")
+ENABLE_DEEPSEEK_FALLBACK = os.getenv("ENABLE_DEEPSEEK_FALLBACK", "1") == "1"
 
 BASE_DIR = Path(__file__).resolve().parent
 AI_TOKENS_LOG_PATH = BASE_DIR / "ai_tokens_grok.log"
+AI_TOKENS_DEEPSEEK_LOG_PATH = BASE_DIR / "ai_tokens_deepseek.log"
 CACHE_TTL_SECONDS = int(float(os.getenv("GROK_CACHE_TTL", str(6 * 3600))))
 _grok_cache: Dict[str, Dict[str, Any]] = {}
 _classify_cache = _grok_cache
@@ -81,10 +94,17 @@ def _get_headers() -> Dict[str, str]:
     return headers
 
 
-def _log_usage(model_name: str, prompt_tokens: Optional[int], completion_tokens: Optional[int], cached_tokens: Optional[int] = None) -> None:
+def _log_usage(
+    model_name: str,
+    prompt_tokens: Optional[int],
+    completion_tokens: Optional[int],
+    cached_tokens: Optional[int] = None,
+    *,
+    log_path: Path = AI_TOKENS_LOG_PATH,
+) -> None:
     ts = time.strftime("%m-%d %H:%M:%S")
     try:
-        with AI_TOKENS_LOG_PATH.open("a", encoding="utf-8") as fh:
+        with log_path.open("a", encoding="utf-8") as fh:
             total = None
             if prompt_tokens is not None and completion_tokens is not None:
                 total = prompt_tokens + completion_tokens
@@ -116,15 +136,22 @@ def _build_user_prompt(category_context: str, text: str) -> str:
     return f"Категории для классификации: {category_context}\n\nСообщение: {text.strip()}"
 
 
-def _call_grok(messages: list[dict[str, Any]], timeout: float = 45.0) -> dict[str, Any]:
+def _call_openrouter_model(
+    model_name: str,
+    messages: list[dict[str, Any]],
+    *,
+    timeout: float,
+    url: str,
+    log_path: Path,
+) -> dict[str, Any]:
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": model_name,
         "messages": messages,
         "temperature": 0.0,
         "response_format": {"type": "json_object"},
     }
     response = requests.post(
-        OPENROUTER_URL,
+        url,
         headers=_get_headers(),
         json=payload,
         timeout=timeout,
@@ -139,12 +166,55 @@ def _call_grok(messages: list[dict[str, Any]], timeout: float = 45.0) -> dict[st
         raise RuntimeError(f"Unexpected OpenRouter response: {data}") from exc
     usage = data.get("usage", {})
     _log_usage(
-        OPENROUTER_MODEL,
+        model_name,
         usage.get("prompt_tokens"),
         usage.get("completion_tokens"),
         usage.get("cached_tokens"),
+        log_path=log_path,
     )
     return json.loads(content)
+
+
+def _call_grok(messages: list[dict[str, Any]], timeout: float = 45.0) -> dict[str, Any]:
+    return _call_openrouter_model(
+        OPENROUTER_MODEL,
+        messages,
+        timeout=timeout,
+        url=OPENROUTER_URL,
+        log_path=AI_TOKENS_LOG_PATH,
+    )
+
+
+def _call_deepseek(messages: list[dict[str, Any]], timeout: float = 45.0) -> dict[str, Any]:
+    return _call_openrouter_model(
+        OPENROUTER_DEEPSEEK_MODEL,
+        messages,
+        timeout=timeout,
+        url=OPENROUTER_DEEPSEEK_URL,
+        log_path=AI_TOKENS_DEEPSEEK_LOG_PATH,
+    )
+
+
+def _run_deepseek_fallback(
+    messages: list[dict[str, Any]],
+    text: str,
+    cache_key: str,
+    base_timeout: float,
+    grok_error: str,
+) -> Optional[Dict[str, Any]]:
+    if not ENABLE_DEEPSEEK_FALLBACK:
+        return None
+
+    logger.info("DEEPSEEK_FALLBACK_ACTIVATED due to OpenRouter error: %s", grok_error)
+    deepseek_timeout = float(os.getenv("DEEPSEEK_TIMEOUT", str(base_timeout)))
+
+    try:
+        result = _call_deepseek(messages, timeout=deepseek_timeout)
+    except Exception as exc:
+        logger.error("DEEPSEEK_CALL_FAILED: %s", exc, exc_info=True)
+        return None
+
+    return _finalize_classification_result(result, text, cache_key)
 
 
 def classify_text_with_ai(
@@ -166,10 +236,32 @@ def classify_text_with_ai(
         {"role": "user", "content": user_prompt},
     ]
 
+    openrouter_timeout = float(os.getenv("OPENROUTER_TIMEOUT", "45.0"))
+
     try:
-        result = _call_grok(messages)
+        result = _call_grok(messages, timeout=openrouter_timeout)
     except Exception as exc:
         logger.error("GROK_CALL_FAILED: %s", exc, exc_info=True)
+        deepseek = _run_deepseek_fallback(
+            messages,
+            text,
+            cache_key,
+            openrouter_timeout,
+            str(exc),
+        )
+        if deepseek is not None:
+            return deepseek
+
+        fallback = _run_openai_fallback(
+            text,
+            categories,
+            locations,
+            client_ai,
+            cache_key,
+            str(exc),
+        )
+        if fallback is not None:
+            return fallback
         return {
             "relevant": False,
             "category": None,
@@ -180,6 +272,47 @@ def classify_text_with_ai(
             "accepted": False,
         }
 
+    return _finalize_classification_result(result, text, cache_key)
+
+
+def _run_openai_fallback(
+    text: str,
+    categories: list[str],
+    locations: list[str],
+    client_ai: Optional[Any],
+    cache_key: str,
+    grok_error: str,
+) -> Optional[Dict[str, Any]]:
+    logger.info("OPENAI_FALLBACK_ACTIVATED due to OpenRouter error: %s", grok_error)
+
+    fallback_client = client_ai or get_openai_client()
+    try:
+        classification = _classify_with_openai(
+            text,
+            categories,
+            locations,
+            fallback_client,
+        )
+    except Exception as fallback_exc:
+        logger.error("OPENAI_FALLBACK_FAILED: %s", fallback_exc, exc_info=True)
+        return None
+
+    try:
+        lower_text = text.lower()
+        category = classification.get("category") if isinstance(classification, dict) else None
+        classification = apply_overrides(classification, lower_text, category)
+    except Exception as override_err:
+        logger.warning("apply_overrides fallback failed: %s", override_err)
+
+    _grok_cache_put(cache_key, classification)
+    return classification
+
+
+def _finalize_classification_result(
+    result: Dict[str, Any],
+    text: str,
+    cache_key: str,
+) -> Dict[str, Any]:
     relevant = bool(result.get("relevant"))
     category = result.get("category")
     subcategory = result.get("subcategory")

@@ -232,7 +232,7 @@ async def send_lead_to_users(
             cats = prefs.get("categories", [])
             ai_category_tag = f"#{cats[0].lower()}" if cats else ""
         msg = (
-            f"📩📩📩 {group_display} | {display_sender}\n\n"
+            f"📩 {group_display} | {display_sender}\n\n"
             f"- {safe_text}\n\n"
             f"{region_tag} {ai_category_tag}".strip()
         )
