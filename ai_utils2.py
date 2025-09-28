@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -199,14 +200,19 @@ def _run_deepseek_fallback(
     messages: list[dict[str, Any]],
     text: str,
     cache_key: str,
-    base_timeout: float,
+    deadline: float,
     grok_error: str,
 ) -> Optional[Dict[str, Any]]:
     if not ENABLE_DEEPSEEK_FALLBACK:
         return None
 
     logger.info("DEEPSEEK_FALLBACK_ACTIVATED due to OpenRouter error: %s", grok_error)
-    deepseek_timeout = float(os.getenv("DEEPSEEK_TIMEOUT", str(base_timeout)))
+    remaining = deadline - time.monotonic()
+    if remaining <= 1.0:
+        logger.warning("DEEPSEEK_FALLBACK_SKIPPED: timeout budget exhausted")
+        return None
+    secondary_cap = max(2.0, min(remaining * 0.6, 6.0))
+    deepseek_timeout = _resolve_timeout(deadline, "DEEPSEEK_TIMEOUT", secondary_cap)
 
     try:
         result = _call_deepseek(messages, timeout=deepseek_timeout)
@@ -236,7 +242,12 @@ def classify_text_with_ai(
         {"role": "user", "content": user_prompt},
     ]
 
-    openrouter_timeout = float(os.getenv("OPENROUTER_TIMEOUT", "45.0"))
+    total_budget = _get_env_float("AI_TIMEOUT", 60.0)
+    if total_budget <= 0:
+        total_budget = 60.0
+    deadline = time.monotonic() + total_budget
+    primary_cap = max(3.0, min(total_budget * 0.5, 12.0))
+    openrouter_timeout = _resolve_timeout(deadline, "OPENROUTER_TIMEOUT", primary_cap)
 
     try:
         result = _call_grok(messages, timeout=openrouter_timeout)
@@ -246,7 +257,7 @@ def classify_text_with_ai(
             messages,
             text,
             cache_key,
-            openrouter_timeout,
+            deadline,
             str(exc),
         )
         if deepseek is not None:
@@ -259,6 +270,7 @@ def classify_text_with_ai(
             client_ai,
             cache_key,
             str(exc),
+            deadline,
         )
         if fallback is not None:
             return fallback
@@ -282,17 +294,33 @@ def _run_openai_fallback(
     client_ai: Optional[Any],
     cache_key: str,
     grok_error: str,
+    deadline: float,
 ) -> Optional[Dict[str, Any]]:
     logger.info("OPENAI_FALLBACK_ACTIVATED due to OpenRouter error: %s", grok_error)
 
+    remaining = deadline - time.monotonic()
+    if remaining <= 1.0:
+        logger.warning("OPENAI_FALLBACK_SKIPPED: timeout budget exhausted")
+        return None
+
     fallback_client = client_ai or get_openai_client()
     try:
-        classification = _classify_with_openai(
-            text,
-            categories,
-            locations,
-            fallback_client,
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                _classify_with_openai,
+                text,
+                categories,
+                locations,
+                fallback_client,
+            )
+            timeout = max(1.0, remaining - 0.5)
+            classification = future.result(timeout=timeout)
+    except FutureTimeout:
+        logger.error(
+            "OPENAI_FALLBACK_TIMEOUT: exceeded %.1fs budget after Grok/DeepSeek failure",
+            remaining,
         )
+        return None
     except Exception as fallback_exc:
         logger.error("OPENAI_FALLBACK_FAILED: %s", fallback_exc, exc_info=True)
         return None
@@ -342,6 +370,24 @@ def _finalize_classification_result(
 
     _grok_cache_put(cache_key, classification)
     return classification
+
+
+def _get_env_float(env_key: str, default: float) -> float:
+    try:
+        return float(os.getenv(env_key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _resolve_timeout(deadline: float, env_key: str, default: float) -> float:
+    configured = _get_env_float(env_key, default)
+    remaining = max(0.0, deadline - time.monotonic())
+    if remaining <= 0.5:
+        return 0.5
+    timeout = configured if configured > 0 else default
+    timeout = min(timeout, default)  # don't exceed caller-specified ceiling
+    timeout = min(timeout, remaining)
+    return max(0.5, timeout)
 
 
 __all__ = ["classify_text_with_ai", "_classify_cache", "apply_overrides", "update_categories"]

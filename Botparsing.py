@@ -38,6 +38,7 @@ print(f"[BOOT] Running on host IP: {ip}")
 VERBOSE_DEBUG = os.getenv("BOT_DEBUG") == "1"
 
 from datetime import datetime, timedelta, timezone
+import time
 # helper for Istanbul time
 def now_istanbul():
     return datetime.now(timezone.utc) + timedelta(hours=3)
@@ -51,6 +52,7 @@ from openai import OpenAI
 import re
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, Button
+from collections import deque
 from filters import (
     extract_stems, is_similar, contains_negative, _contains_word, is_advertisement,
     infer_region_from_text, extract_transfer_route, _all_locations_from_text,
@@ -65,6 +67,18 @@ import message_queue
 # Initialize global variables at module level to prevent NameError
 SELF_ID = None
 SELF_USERNAME = None
+
+try:
+    _dedup_env = float(os.getenv("DEDUP_WINDOW_SECONDS", "600"))
+except (TypeError, ValueError):
+    _dedup_env = 600.0
+DEDUP_WINDOW_SECONDS = int(_dedup_env) if _dedup_env > 0 else 0
+try:
+    MAX_DEDUP_CACHE = int(os.getenv("DEDUP_CACHE_LIMIT", "20000"))
+except (TypeError, ValueError):
+    MAX_DEDUP_CACHE = 20000
+_recent_text_cache = {}
+_recent_text_queue = deque()
 
 # Очередь сообщений
 import asyncio
@@ -107,6 +121,42 @@ def log_info_event(code, **kwargs):
     line = log_evt(code, **kwargs)
     if line:
         logger.info(line)
+
+
+def _normalize_for_dedup(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _should_drop_duplicate(normalized_text: str) -> bool:
+    if DEDUP_WINDOW_SECONDS <= 0 or not normalized_text:
+        return False
+
+    now = time.time()
+    cutoff = now - DEDUP_WINDOW_SECONDS
+
+    # purge expired entries
+    while _recent_text_queue and _recent_text_queue[0][0] <= cutoff:
+        ts, text_key = _recent_text_queue.popleft()
+        current = _recent_text_cache.get(text_key)
+        if current is not None and current <= cutoff and current == ts:
+            _recent_text_cache.pop(text_key, None)
+
+    last_seen = _recent_text_cache.get(normalized_text)
+    is_duplicate = last_seen is not None and last_seen >= cutoff
+
+    _recent_text_cache[normalized_text] = now
+    _recent_text_queue.append((now, normalized_text))
+
+    if MAX_DEDUP_CACHE > 0 and len(_recent_text_queue) > MAX_DEDUP_CACHE:
+        # trim oldest entries beyond cache limit
+        overflow = len(_recent_text_queue) - MAX_DEDUP_CACHE
+        for _ in range(overflow):
+            ts, text_key = _recent_text_queue.popleft()
+            current = _recent_text_cache.get(text_key)
+            if current is not None and current == ts:
+                _recent_text_cache.pop(text_key, None)
+
+    return is_duplicate
 
 # Persist metrics to JSON on shutdown
 def dump_metrics():
@@ -347,7 +397,12 @@ async def process_message(event):
         logger.debug(log_evt("DROP_NEGCTX", chat_id=chat_id, msg=lower_text[:180]))
         return
 
-    # (DEDUP removed: no deduplication, process all messages)
+    # Deduplicate identical messages within configured window
+    normalized_for_dedup = _normalize_for_dedup(clean_text)
+    if _should_drop_duplicate(normalized_for_dedup):
+        metrics['dedup_text'] += 1
+        log_info_event("DROP_DUP", chat_id=chat_id, msg=clean_text[:120])
+        return
     # Pre-filter real estate ads to save AI calls
     if is_advertisement(text):
         metrics['pre_ad_filtered'] += 1
