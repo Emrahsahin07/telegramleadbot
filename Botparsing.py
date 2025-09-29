@@ -72,7 +72,7 @@ try:
     _dedup_env = float(os.getenv("DEDUP_WINDOW_SECONDS", "600"))
 except (TypeError, ValueError):
     _dedup_env = 600.0
-DEDUP_WINDOW_SECONDS = int(_dedup_env) if _dedup_env > 0 else 0
+DEDUP_WINDOW_SECONDS = int(_dedup_env if _dedup_env > 0 else 0)
 try:
     MAX_DEDUP_CACHE = int(os.getenv("DEDUP_CACHE_LIMIT", "20000"))
 except (TypeError, ValueError):
@@ -401,7 +401,6 @@ async def process_message(event):
     normalized_for_dedup = _normalize_for_dedup(clean_text)
     if _should_drop_duplicate(normalized_for_dedup):
         metrics['dedup_text'] += 1
-        log_info_event("DROP_DUP", chat_id=chat_id, msg=clean_text[:120])
         return
     # Pre-filter real estate ads to save AI calls
     if is_advertisement(text):
