@@ -561,6 +561,8 @@ def apply_overrides(cla, lower_text, category_heuristic):
     if any(w in lower for w in rental_signals) or ("квартир" in lower and any(w in lower for w in ["ищу", "ищем", "ищет"])):
         cla["relevant"] = True
         cla["category"] = cla.get("category") or "недвижимость"
+        if not cla.get("subcategory"):
+            cla["subcategory"] = "аренда"
         cla["explanation"] = "Запрос аренды недвижимости"
         return cla
     # Доменное правило: массаж → бьюти

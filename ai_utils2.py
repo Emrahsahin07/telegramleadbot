@@ -40,11 +40,19 @@ OPENROUTER_URL = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "x-ai/grok-4-fast:free")
 OPENROUTER_DEEPSEEK_URL = os.getenv("OPENROUTER_DEEPSEEK_URL", OPENROUTER_URL)
 OPENROUTER_DEEPSEEK_MODEL = os.getenv("OPENROUTER_DEEPSEEK_MODEL", "deepseek/deepseek-chat-v3.1:free")
+OPENROUTER_OSS_URL = os.getenv("OPENROUTER_OSS_URL", OPENROUTER_URL)
+OPENROUTER_OSS_MODEL = os.getenv("OPENROUTER_OSS_MODEL", "openai/gpt-oss-20b:free")
+OPENROUTER_GLM_URL = os.getenv("OPENROUTER_GLM_URL", OPENROUTER_URL)
+OPENROUTER_GLM_MODEL = os.getenv("OPENROUTER_GLM_MODEL", "z-ai/glm-4.5-air:free")
 ENABLE_DEEPSEEK_FALLBACK = os.getenv("ENABLE_DEEPSEEK_FALLBACK", "1") == "1"
+ENABLE_OSS_FALLBACK = os.getenv("ENABLE_OSS_FALLBACK", "1") == "1"
+ENABLE_GLM_FALLBACK = os.getenv("ENABLE_GLM_FALLBACK", "1") == "1"
 
 BASE_DIR = Path(__file__).resolve().parent
 AI_TOKENS_LOG_PATH = BASE_DIR / "ai_tokens_grok.log"
 AI_TOKENS_DEEPSEEK_LOG_PATH = BASE_DIR / "ai_tokens_deepseek.log"
+AI_TOKENS_OSS_LOG_PATH = BASE_DIR / "ai_tokens_oss.log"
+AI_TOKENS_GLM_LOG_PATH = BASE_DIR / "ai_tokens_glm.log"
 CACHE_TTL_SECONDS = int(float(os.getenv("GROK_CACHE_TTL", str(6 * 3600))))
 _grok_cache: Dict[str, Dict[str, Any]] = {}
 _classify_cache = _grok_cache
@@ -196,6 +204,26 @@ def _call_deepseek(messages: list[dict[str, Any]], timeout: float = 45.0) -> dic
     )
 
 
+def _call_oss(messages: list[dict[str, Any]], timeout: float = 45.0) -> dict[str, Any]:
+    return _call_openrouter_model(
+        OPENROUTER_OSS_MODEL,
+        messages,
+        timeout=timeout,
+        url=OPENROUTER_OSS_URL,
+        log_path=AI_TOKENS_OSS_LOG_PATH,
+    )
+
+
+def _call_glm(messages: list[dict[str, Any]], timeout: float = 45.0) -> dict[str, Any]:
+    return _call_openrouter_model(
+        OPENROUTER_GLM_MODEL,
+        messages,
+        timeout=timeout,
+        url=OPENROUTER_GLM_URL,
+        log_path=AI_TOKENS_GLM_LOG_PATH,
+    )
+
+
 def _run_deepseek_fallback(
     messages: list[dict[str, Any]],
     text: str,
@@ -218,6 +246,58 @@ def _run_deepseek_fallback(
         result = _call_deepseek(messages, timeout=deepseek_timeout)
     except Exception as exc:
         logger.error("DEEPSEEK_CALL_FAILED: %s", exc, exc_info=True)
+        return None
+
+    return _finalize_classification_result(result, text, cache_key)
+
+
+def _run_glm_fallback(
+    messages: list[dict[str, Any]],
+    text: str,
+    cache_key: str,
+    deadline: float,
+    previous_error: str,
+) -> Optional[Dict[str, Any]]:
+    if not ENABLE_GLM_FALLBACK:
+        return None
+
+    logger.info("GLM_FALLBACK_ACTIVATED due to previous error: %s", previous_error)
+    remaining = deadline - time.monotonic()
+    if remaining <= 1.0:
+        logger.warning("GLM_FALLBACK_SKIPPED: timeout budget exhausted")
+        return None
+    glm_timeout = _resolve_timeout(deadline, "GLM_TIMEOUT", max(2.0, min(remaining * 0.6, 8.0)))
+
+    try:
+        result = _call_glm(messages, timeout=glm_timeout)
+    except Exception as exc:
+        logger.error("GLM_CALL_FAILED: %s", exc, exc_info=True)
+        return None
+
+    return _finalize_classification_result(result, text, cache_key)
+
+
+def _run_oss_fallback(
+    messages: list[dict[str, Any]],
+    text: str,
+    cache_key: str,
+    deadline: float,
+    previous_error: str,
+) -> Optional[Dict[str, Any]]:
+    if not ENABLE_OSS_FALLBACK:
+        return None
+
+    logger.info("OSS_FALLBACK_ACTIVATED due to previous error: %s", previous_error)
+    remaining = deadline - time.monotonic()
+    if remaining <= 1.0:
+        logger.warning("OSS_FALLBACK_SKIPPED: timeout budget exhausted")
+        return None
+    oss_timeout = _resolve_timeout(deadline, "OSS_TIMEOUT", max(2.0, min(remaining * 0.6, 8.0)))
+
+    try:
+        result = _call_oss(messages, timeout=oss_timeout)
+    except Exception as exc:
+        logger.error("OSS_CALL_FAILED: %s", exc, exc_info=True)
         return None
 
     return _finalize_classification_result(result, text, cache_key)
@@ -262,6 +342,26 @@ def classify_text_with_ai(
         )
         if deepseek is not None:
             return deepseek
+
+        glm = _run_glm_fallback(
+            messages,
+            text,
+            cache_key,
+            deadline,
+            str(exc),
+        )
+        if glm is not None:
+            return glm
+
+        oss = _run_oss_fallback(
+            messages,
+            text,
+            cache_key,
+            deadline,
+            str(exc),
+        )
+        if oss is not None:
+            return oss
 
         fallback = _run_openai_fallback(
             text,
