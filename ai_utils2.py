@@ -73,15 +73,20 @@ Rules:
    "успей", etc.
 3. Past experience reports, reviews, or feedback without a new request are not
    leads.
-4. If the user asks for price, availability, or recommendation of a service,
+4. Announcements about chat rules, welcome messages, or instructions on how to
+   post ads are not leads; treat them as irrelevant.
+5. If the user asks for price, availability, or recommendation of a service,
    treat it as relevant even if phrased as a question.
-5. Region may be extracted from city/region names (Анталия, Алания, Кемер, etc.).
+6. Region may be extracted from city/region names (Анталия, Алания, Кемер, etc.).
    Leave null if the text does not specify one.
-6. Explanation must be concise (<70 characters) and reference the trigger that
+7. Explanation must be concise (<70 characters) and reference the trigger that
    drove your decision.
-7. Use the provided category list exactly. Do not invent new categories.
-8. Confidence: 0.9+ for clear leads, 0.6-0.8 for ambiguous leads, below 0.5 if
+8. Use the provided category list exactly. Do not invent new categories.
+9. Confidence: 0.9+ for clear leads, 0.6-0.8 for ambiguous leads, below 0.5 if
    the message is almost certainly irrelevant.
+
+Example non-lead: "Приветствуем … здесь вы можете размещать объявления" →
+{"relevant": false, ...}.
 
 Return only JSON. Do not include markdown or additional commentary."""
 

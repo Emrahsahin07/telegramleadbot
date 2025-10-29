@@ -17,6 +17,7 @@ from constants import (
     QUESTION_INDICATORS,
     SALESY_TERMS,
     PROMO_CTA_TERMS,
+    ANNOUNCEMENT_TERMS,
 )
 # Load environment variables
 load_dotenv()
@@ -564,6 +565,15 @@ def apply_overrides(cla, lower_text, category_heuristic):
         if not cla.get("subcategory"):
             cla["subcategory"] = "аренда"
         cla["explanation"] = "Запрос аренды недвижимости"
+        return cla
+    # Объявления/правила досок объявлений не являются лидами
+    if any(term in lower for term in ANNOUNCEMENT_TERMS):
+        cla["relevant"] = False
+        cla["accepted"] = False
+        cla["category"] = None
+        cla.pop("subcategory", None)
+        cla["confidence"] = 0.0
+        cla["explanation"] = "Правила или приветствие доски объявлений"
         return cla
     # Доменное правило: массаж → бьюти
     if any(w in lower for w in ("массаж", "массажист", "массажистка")):
