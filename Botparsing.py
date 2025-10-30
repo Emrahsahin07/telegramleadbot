@@ -190,7 +190,6 @@ def _should_drop_duplicate(normalized_text: str) -> bool:
 async def watchdog_keepalive_task():
     if not WATCHDOG_ENABLED:
         return
-    _sd_notify("READY=1")
     interval = WATCHDOG_INTERVAL
     try:
         while True:
@@ -1189,6 +1188,8 @@ async def main():
         if WATCHDOG_ENABLED:
             asyncio.create_task(watchdog_keepalive_task())
             logger.info("🩺 Systemd watchdog task started")
+
+        _sd_notify("READY=1")
 
         # Run both clients until disconnected with improved error handling
         try:
