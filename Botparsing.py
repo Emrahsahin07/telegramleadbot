@@ -5,6 +5,11 @@ try:
 except Exception:
     requests = None
 
+try:
+    from systemd.daemon import notify as sd_notify
+except Exception:
+    sd_notify = None
+
 def get_ip(timeout: int = 3) -> str:
     env_ip = os.getenv("BOT_IP") or os.getenv("MY_IP")
     if env_ip:
@@ -79,6 +84,29 @@ except (TypeError, ValueError):
     MAX_DEDUP_CACHE = 20000
 _recent_text_cache = {}
 _recent_text_queue = deque()
+
+
+def _sd_notify(message: str) -> None:
+    if sd_notify is None:
+        return
+    try:
+        sd_notify(message)
+    except Exception:
+        pass
+
+
+WATCHDOG_ENABLED = False
+WATCHDOG_INTERVAL = 30
+if sd_notify is not None:
+    watchdog_usec = os.getenv("WATCHDOG_USEC")
+    try:
+        usec_int = int(watchdog_usec) if watchdog_usec else 0
+    except (TypeError, ValueError):
+        usec_int = 0
+    if usec_int > 0:
+        WATCHDOG_ENABLED = True
+        WATCHDOG_INTERVAL = max(1, usec_int // 2_000_000)
+
 
 # Очередь сообщений
 import asyncio
@@ -157,6 +185,20 @@ def _should_drop_duplicate(normalized_text: str) -> bool:
                 _recent_text_cache.pop(text_key, None)
 
     return is_duplicate
+
+
+async def watchdog_keepalive_task():
+    if not WATCHDOG_ENABLED:
+        return
+    _sd_notify("READY=1")
+    interval = WATCHDOG_INTERVAL
+    try:
+        while True:
+            _sd_notify("WATCHDOG=1")
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        _sd_notify("STOPPING=1")
+        raise
 
 # Persist metrics to JSON on shutdown
 def dump_metrics():
@@ -1144,6 +1186,10 @@ async def main():
             asyncio.create_task(worker(f"worker-{i}"))
         logger.info(f"🧵 Started {MAX_WORKERS} worker(s)")
 
+        if WATCHDOG_ENABLED:
+            asyncio.create_task(watchdog_keepalive_task())
+            logger.info("🩺 Systemd watchdog task started")
+
         # Run both clients until disconnected with improved error handling
         try:
             # Создаем задачи для обоих клиентов
@@ -1186,6 +1232,7 @@ async def main():
             await disconnect_all_clients()
         except Exception as e:
             logger.error(f"Error during final cleanup: {e}")
+        _sd_notify("STOPPING=1")
 
 if __name__ == "__main__":
     try:
