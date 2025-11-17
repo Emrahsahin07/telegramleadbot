@@ -5,6 +5,7 @@ from html import escape
 import snowballstemmer
 from telethon import Button
 from telethon import events
+from telethon.errors.rpcerrorlist import UserIsBlockedError
 import hashlib
 from datetime import datetime, timezone, timedelta
 from filters import extract_stems
@@ -255,6 +256,10 @@ async def send_lead_to_users(
                 buttons=buttons  # ← Используем кнопки с feedback
             )
             sent_uids.append(uid)
+        except UserIsBlockedError:
+            logger.info(f"User {uid} blocked the bot; skipping lead delivery")
+            failed_uids.append(uid)
+            continue
         except Exception as e:
             metrics['send_errors'] += 1
             failed_uids.append(uid)
