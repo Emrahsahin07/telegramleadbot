@@ -102,11 +102,15 @@ async def send_lead_to_users(
             if now > end:
                 # Paid subscription expired: notify user once
                 if not prefs.get('paid_expired_notified'):
-                    await bot_client.send_message(
-                        uid,
-                        "⌛ Ваша подписка закончилась. Чтобы продолжить получать лиды, нажмите кнопку:",
-                        buttons=[[Button.inline("Подписаться", b"menu:subscribe")]]
-                    )
+                    try:
+                        await bot_client.send_message(
+                            uid,
+                            "⌛ Ваша подписка закончилась. Чтобы продолжить получать лиды, нажмите кнопку:",
+                            buttons=[[Button.inline("Подписаться", b"menu:subscribe")]]
+                        )
+                    except UserIsBlockedError:
+                        logger.info(f"User {uid} blocked the bot during paid expiry notice; skipping notification")
+                        continue
                     async with _subscription_lock:
                         prefs['paid_expired_notified'] = True
                         # Save updated subscriptions
@@ -125,11 +129,15 @@ async def send_lead_to_users(
             if now - start > timedelta(days=2):
                 # Trial expired: notify user once
                 if not prefs.get('trial_expired_notified'):
-                    await bot_client.send_message(
-                        uid,
-                        "⌛ Ваш пробный период закончился. Чтобы продолжить получать лиды, нажмите кнопку:",
-                        buttons=[[Button.inline("Подписаться", b"menu:subscribe")]]
-                    )
+                    try:
+                        await bot_client.send_message(
+                            uid,
+                            "⌛ Ваш пробный период закончился. Чтобы продолжить получать лиды, нажмите кнопку:",
+                            buttons=[[Button.inline("Подписаться", b"menu:subscribe")]]
+                        )
+                    except UserIsBlockedError:
+                        logger.info(f"User {uid} blocked the bot during trial expiry notice; skipping notification")
+                        continue
                     async with _subscription_lock:
                         prefs['trial_expired_notified'] = True
                         # Save updated subscriptions
