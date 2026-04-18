@@ -155,6 +155,11 @@ class FeedbackManager:
                     SELECT COUNT(*) FROM feedback WHERE user_feedback IS NOT NULL
                 """)
                 total_feedback = (await cursor.fetchone())[0]
+
+                cursor = await db.execute("""
+                    SELECT COUNT(*) FROM feedback
+                """)
+                total_sent = (await cursor.fetchone())[0]
                 
                 # Useful vs not useful
                 cursor = await db.execute("""
@@ -175,10 +180,11 @@ class FeedbackManager:
                 
                 return {
                     'total_feedback': total_feedback,
+                    'total_sent': total_sent,
                     'useful_count': feedback_breakdown.get('useful', 0),
                     'not_useful_count': feedback_breakdown.get('not_useful', 0),
                     'recent_feedback_7d': recent_feedback,
-                    'feedback_rate': round(total_feedback / max(1, total_feedback) * 100, 2)
+                    'feedback_rate': round(total_feedback / max(1, total_sent) * 100, 2)
                 }
         except Exception as e:
             logger.error(f"Error getting feedback stats: {e}")

@@ -49,7 +49,7 @@ def now_istanbul():
     return datetime.now(timezone.utc) + timedelta(hours=3)
 
 import keep_alive  # стартует Flask-сервер для keep-alive
-from ai_utils2 import classify_text_with_ai, _classify_cache, apply_overrides, update_categories
+from ai_utils import classify_text_with_ai, _classify_cache, apply_overrides, update_categories
 from connection_manager import add_telegram_client, connect_all_clients, start_connection_monitoring, disconnect_all_clients
 
 import openai
@@ -66,7 +66,7 @@ from filters import (
 from delivery import send_lead_to_users, WORD_RE, _stem
 
 from constants import BUYER_TRIGGERS, OFFER_TERMS
-from config import ADMIN_ID, categories, metrics, logger, bot_client, subscriptions, save_subscriptions
+from config import ADMIN_ID, categories, metrics, logger, bot_client, subscriptions, save_subscriptions, CANONICAL_LOCATIONS
 import message_queue
 
 # Initialize global variables at module level to prevent NameError
@@ -236,13 +236,10 @@ if not bot_token:
 # ADMIN_ID moved to config.py
 
 # Initialize OpenAI client after API key is loaded (bounded timeouts)
-from ai_utils2 import get_openai_client
+from ai_utils import get_openai_client
 client_ai = get_openai_client()
 
 from config import LOCATION_ALIAS
-# List of canonical display names
-
-CANONICAL_LOCATIONS = sorted(set(LOCATION_ALIAS.values()))
 
 # Simple bot command to verify liveness in dev
 @bot_client.on(events.NewMessage(pattern=r"/ping"))
@@ -891,6 +888,7 @@ async def process_message(event):
                     "sender_id": sender_id,
                     "category": cla.get('category'),
                     "region": cla.get('region'),
+                    "regions": sorted(candidate_regions),
                     "subcategory": cla.get('subcategory'),
                     "confidence": confidence,
                     "explanation": cla.get('explanation')
@@ -1088,7 +1086,7 @@ async def watch_categories():
             stat = os.stat("categories.json")
             if stat.st_mtime > last_mtime:
                 last_mtime = stat.st_mtime
-                from ai_utils2 import update_categories
+                from ai_utils import update_categories
                 update_categories()
             await asyncio.sleep(5)
         except Exception as e:
@@ -1105,7 +1103,7 @@ async def main():
         await message_queue.init_db()
         
         # Обновляем категории
-        from ai_utils2 import update_categories
+        from ai_utils import update_categories
         update_categories()
 
         # Наблюдение за categories.json

@@ -221,12 +221,13 @@ async def mark_completed(event_id: int):
 async def mark_failed(event_id: int, error: Optional[str] = None):
     """Отмечает сообщение как неудачное."""
     async with db_manager.get_connection() as db:
-        event_data = json.dumps({"error": error}) if error else None
         await db.execute(
-            "UPDATE queue SET status = 'failed', processed_at = CURRENT_TIMESTAMP, event = ? WHERE id = ?",
-            (event_data, event_id)
+            "UPDATE queue SET status = 'failed', processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (event_id,)
         )
         await db.commit()
+    if error:
+        logger.error(f"queue: event_id={event_id} marked failed: {error}")
 
 async def cleanup_old_messages():
     """Очистка старых обработанных сообщений."""

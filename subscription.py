@@ -1,6 +1,6 @@
 import os
 import json
-from config import LOCATION_ALIAS
+from config import normalize_location
 
 
 if not os.path.exists("subscriptions.json"):
@@ -18,6 +18,6 @@ def save_subscriptions():
 for uid, prefs in subscriptions.items():
     normalized_locs = []
     for loc in prefs.get("locations", []):
-        canonical = LOCATION_ALIAS.get(loc.lower(), loc)
+        canonical = normalize_location(loc) or loc
         normalized_locs.append(canonical)
     prefs["locations"] = sorted(set(normalized_locs))

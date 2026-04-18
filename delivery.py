@@ -2,14 +2,24 @@ import logging
 import os
 import re
 from html import escape
+import hashlib
 import snowballstemmer
 from telethon import Button
 from telethon import events
 from telethon.errors.rpcerrorlist import UserIsBlockedError
-import hashlib
 from datetime import datetime, timezone, timedelta
 from filters import extract_stems
-from config import bot_client, ADMIN_ID, categories, subscriptions, save_subscriptions, metrics, logger
+from config import (
+    bot_client,
+    ADMIN_ID,
+    categories,
+    subscriptions,
+    save_subscriptions,
+    metrics,
+    logger,
+    normalize_location,
+    parse_iso_datetime,
+)
 from feedback_manager import feedback_manager
 import asyncio
 
@@ -47,6 +57,12 @@ def build_lead_buttons(link, sender_username, sender_id, message_id=None):
     
     return buttons if buttons else None
 
+
+def _build_feedback_message_id(uid: int, chat_id: int, text: str, link: str = "") -> str:
+    nonce = datetime.now(timezone.utc).isoformat()
+    digest = hashlib.sha1(f"{uid}:{chat_id}:{link}:{text}:{nonce}".encode("utf-8")).hexdigest()[:12]
+    return f"lead_{uid}_{chat_id}_{digest}"
+
 from typing import Union
 
 async def send_lead_to_users(
@@ -79,11 +95,11 @@ async def send_lead_to_users(
         current_bot_id = None
     if desired_bot_id and current_bot_id and current_bot_id != desired_bot_id:
         logger.error(f"SKIP delivery: running under wrong bot id={current_bot_id}, expected id={desired_bot_id}")
-        return
+        return [], []
 
     if not _send_enabled():
         logger.info("[DEV] Delivery disabled; skipping notifications")
-        return
+        return [], []
     sent_uids: list[int] = []
     failed_uids = []
     # Send to each user based on their subscriptions
@@ -98,7 +114,10 @@ async def send_lead_to_users(
         # Check paid subscription first
         sub_end = prefs.get('subscription_end')
         if sub_end:
-            end = datetime.fromisoformat(sub_end)
+            end = parse_iso_datetime(sub_end)
+            if end is None:
+                logger.warning(f"User {uid} has invalid subscription_end={sub_end!r}")
+                continue
             if now > end:
                 # Paid subscription expired: notify user once
                 if not prefs.get('paid_expired_notified'):
@@ -123,9 +142,10 @@ async def send_lead_to_users(
             if not ts:
                 # Trial not started yet
                 continue
-            start = datetime.fromisoformat(ts)
-            if start.tzinfo is None:
-                start = start.replace(tzinfo=timezone.utc)
+            start = parse_iso_datetime(ts)
+            if start is None:
+                logger.warning(f"User {uid} has invalid trial_start={ts!r}")
+                continue
             if now - start > timedelta(days=2):
                 # Trial expired: notify user once
                 if not prefs.get('trial_expired_notified'):
@@ -156,14 +176,21 @@ async def send_lead_to_users(
                 keywords.extend(extract_stems(sub_entry.get("keywords", [])))
 
         keywords = [str(k) for k in keywords]
-        locations = prefs.get("locations", [])
-        target_regions = set(regions or ([region] if region else []))
+        locations = {
+            normalize_location(loc)
+            for loc in prefs.get("locations", [])
+            if normalize_location(loc)
+        }
+        target_regions = {
+            normalize_location(loc)
+            for loc in (regions or ([region] if region else []))
+            if normalize_location(loc)
+        }
         # Changed logic: Send if ANY of the detected regions match user's subscribed locations
         # This ensures users get transfer messages that involve their region, even if other regions are also mentioned
-        user_locations_set = set(locations)
-        if not target_regions or not user_locations_set.intersection(target_regions):
+        if not target_regions or not locations.intersection(target_regions):
             metrics['pref_region_skipped'] += 1
-            logger.debug(f"Drop user {uid}: regions {sorted(target_regions)} don't match any of {locations}")
+            logger.debug(f"Drop user {uid}: regions {sorted(target_regions)} don't match any of {sorted(locations)}")
             continue
         # --- strict AI‑category filter ---------------------------------
         # Отправляем лид только если AI определил категорию
@@ -251,17 +278,34 @@ async def send_lead_to_users(
             continue
 
         # High confidence - standard buttons (no feedback row by default)
-        message_id = None
-        buttons = build_lead_buttons(link, sender_username, sender_id, message_id=None)
+        feedback_message_id = _build_feedback_message_id(uid, chat_id, text, link)
+        buttons = build_lead_buttons(link, sender_username, sender_id, message_id=feedback_message_id)
         
         # Send message with the constructed buttons
         try:
-            await bot_client.send_message(
+            sent_message = await bot_client.send_message(
                 uid,
                 msg,
                 parse_mode="HTML",
                 link_preview=False,
                 buttons=buttons  # ← Используем кнопки с feedback
+            )
+            await feedback_manager.store_lead_sent(
+                message_id=feedback_message_id,
+                user_id=str(uid),
+                message_text=text,
+                ai_classification={
+                    "category": detected_category,
+                    "subcategory": subcategory,
+                    "region": normalize_location(region),
+                    "regions": sorted(target_regions),
+                    "confidence": confidence,
+                    "source": "delivery",
+                    "telegram_message_id": getattr(sent_message, "id", None),
+                },
+                category=detected_category,
+                region=normalize_location(region),
+                confidence=confidence,
             )
             sent_uids.append(uid)
         except UserIsBlockedError:

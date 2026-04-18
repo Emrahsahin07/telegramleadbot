@@ -1,9 +1,15 @@
 # Импортируем напрямую из config.py
-from config import bot_client, subscriptions, ADMIN_ID, save_subscriptions, categories, LOCATION_ALIAS, logger
+from config import (
+    bot_client,
+    subscriptions,
+    ADMIN_ID,
+    save_subscriptions,
+    categories,
+    CANONICAL_LOCATIONS,
+    logger,
+    parse_iso_datetime,
+)
 from feedback_manager import feedback_manager
-
-# Canonical locations
-CANONICAL_LOCATIONS = sorted(set(LOCATION_ALIAS.values()))
 
 def has_subcats(cat: str) -> bool:
     """Возвращает True, если у категории есть подкатегории в categories.json"""
@@ -88,11 +94,12 @@ async def cmd_start(event):
     trial = prefs.get('trial_start')
     sub_end = prefs.get('subscription_end')
     if sub_end:
-        end = datetime.fromisoformat(sub_end).astimezone(ISTANBUL_TZ)
+        end_dt = parse_iso_datetime(sub_end)
+        end = end_dt.astimezone(ISTANBUL_TZ) if end_dt else datetime.now(ISTANBUL_TZ)
         subscription_status = f"🛡 до {end.strftime('%d.%m')}"
         subscription_button = "💎 Pro активен"
     elif trial:
-        start = datetime.fromisoformat(trial)
+        start = parse_iso_datetime(trial) or datetime.now(timezone.utc)
         end_dt = start + timedelta(days=TRIAL_DAYS)
         end = end_dt.astimezone(ISTANBUL_TZ)
         subscription_status = f"🎁 до {end.strftime('%d.%m %H:%M')}"
@@ -164,10 +171,11 @@ async def callback(event):
             trial = prefs.get('trial_start')
             sub_end = prefs.get('subscription_end')
             if sub_end:
-                end = datetime.fromisoformat(sub_end).astimezone(ISTANBUL_TZ)
+                end_dt = parse_iso_datetime(sub_end)
+                end = end_dt.astimezone(ISTANBUL_TZ) if end_dt else datetime.now(ISTANBUL_TZ)
                 subscription_status = f"🛡 до {end.strftime('%d.%m')}"
             elif trial:
-                start = datetime.fromisoformat(trial)
+                start = parse_iso_datetime(trial) or datetime.now(timezone.utc)
                 end_dt = start + timedelta(days=TRIAL_DAYS)
                 end = end_dt.astimezone(ISTANBUL_TZ)
                 subscription_status = f"🎁 до {end.strftime('%d.%m %H:%M')}"
@@ -457,7 +465,7 @@ async def callback(event):
         elif data == 'menu:plan':
             ts = prefs.get('trial_start')
             if ts:
-                start = datetime.fromisoformat(ts)
+                start = parse_iso_datetime(ts) or datetime.now(timezone.utc)
                 end_dt = start + timedelta(days=2)
                 end_local = end_dt.astimezone(ISTANBUL_TZ)
                 end_str = end_local.strftime('%Y-%m-%d %H:%M (UTC+3)')
@@ -514,7 +522,8 @@ async def callback(event):
             # Check current status
             sub_end = prefs.get('subscription_end')
             if sub_end:
-                end = datetime.fromisoformat(sub_end).astimezone(ISTANBUL_TZ)
+                end_dt = parse_iso_datetime(sub_end)
+                end = end_dt.astimezone(ISTANBUL_TZ) if end_dt else datetime.now(ISTANBUL_TZ)
                 text = (
                     f"💎 Pro активна до {end.strftime('%d.%m.%Y %H:%M')}\n\n"
                     "🔄 Продлить подписку:\n"

@@ -6,7 +6,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from collections import Counter
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timezone
 from telethon import TelegramClient
 
 # Base directory path for this config file
@@ -142,8 +142,8 @@ LOCATION_ALIAS = {
     "анталья": "Анталия",
     "анталии": "Анталия",  # dative case
     "анталию": "Анталия",  # accusative case
-    "алания": "Алания",
-    "аланья": "Алания",
+    "алания": "Аланья",
+    "аланья": "Аланья",
     "авсаллар": "Авсаллар",
     "кемер": "Кемер",
     "кемера": "Кемер",
@@ -169,13 +169,41 @@ LOCATION_ALIAS = {
     "фетхие": "Фетхие",
     # Latin aliases (strict word boundaries are handled in filters)
     "antalya": "Анталия",
-    "alanya": "Алания",
+    "alanya": "Аланья",
     "mersin": "Мерсин",
     "side": "Сиде",
     "fethiye": "Фетхие",
     "kemer": "Кемер",
     "istanbul": "Стамбул",
 }
+
+CANONICAL_LOCATIONS = sorted(set(LOCATION_ALIAS.values()))
+
+
+def normalize_location(location: str | None) -> str | None:
+    """Normalize any known location alias to a single canonical display value."""
+    if location is None:
+        return None
+    cleaned = str(location).strip()
+    if not cleaned:
+        return None
+    canonical = LOCATION_ALIAS.get(cleaned.lower())
+    if canonical:
+        return canonical
+    for known in CANONICAL_LOCATIONS:
+        if known.lower() == cleaned.lower():
+            return known
+    return cleaned
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    """Parse ISO datetime and assume UTC when tzinfo is missing."""
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 # Configuration validation function
 def validate_config():

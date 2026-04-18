@@ -1,5 +1,6 @@
 # subscription_utils.py - Utility functions for subscription status checking
 from datetime import datetime, timezone, timedelta
+from config import parse_iso_datetime
 
 # Istanbul timezone
 ISTANBUL_TZ = timezone(timedelta(hours=3))
@@ -16,7 +17,15 @@ def get_subscription_status(prefs: dict) -> dict:
     # Check paid subscription first
     sub_end = prefs.get('subscription_end')
     if sub_end:
-        end_dt = datetime.fromisoformat(sub_end)
+        end_dt = parse_iso_datetime(sub_end)
+        if end_dt is None:
+            return {
+                'status': 'none',
+                'end_date': None,
+                'end_local': None,
+                'is_active': False,
+                'status_text': "🎁 Нет пробного"
+            }
         end_local = end_dt.astimezone(ISTANBUL_TZ)
         is_active = now <= end_dt
         return {
@@ -30,7 +39,15 @@ def get_subscription_status(prefs: dict) -> dict:
     # Check trial subscription
     trial_start = prefs.get('trial_start')
     if trial_start:
-        start = datetime.fromisoformat(trial_start)
+        start = parse_iso_datetime(trial_start)
+        if start is None:
+            return {
+                'status': 'none',
+                'end_date': None,
+                'end_local': None,
+                'is_active': False,
+                'status_text': "🎁 Нет пробного"
+            }
         end_dt = start + timedelta(days=2)
         end_local = end_dt.astimezone(ISTANBUL_TZ)
         is_active = now <= end_dt
