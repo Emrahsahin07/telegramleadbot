@@ -6,7 +6,11 @@ import hashlib
 import snowballstemmer
 from telethon import Button
 from telethon import events
-from telethon.errors.rpcerrorlist import UserIsBlockedError
+from telethon.errors import (
+    UserIsBlockedError,
+    InputUserDeactivatedError,
+    PeerIdInvalidError,
+)
 from datetime import datetime, timezone, timedelta
 from filters import extract_stems
 from config import (
@@ -128,7 +132,13 @@ async def send_lead_to_users(
                             buttons=[[Button.inline("Подписаться", b"menu:subscribe")]]
                         )
                     except UserIsBlockedError:
-                        logger.info(f"User {uid} blocked the bot during paid expiry notice; skipping notification")
+                        logger.info(f"User {uid} blocked the bot; skipping")
+                        continue
+                    except InputUserDeactivatedError:
+                        logger.info(f"User {uid} is deleted/deactivated; skipping")
+                        continue
+                    except PeerIdInvalidError:
+                        logger.info(f"User {uid} has invalid Telegram peer; skipping")
                         continue
                     async with _subscription_lock:
                         prefs['paid_expired_notified'] = True
