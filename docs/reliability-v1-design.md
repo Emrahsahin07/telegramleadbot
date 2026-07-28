@@ -1,7 +1,39 @@
 # Reliability v1 technical design
 
-Status: proposed only. This document does not authorize or apply a production
-database migration.
+Status: the fenced delivery outbox and minimal queue lease slice is implemented
+in the current uncommitted `reliability-v1` worktree. Production rollout is not
+authorized by this document. Typed AI outcomes and durable queue-level Telegram
+identity remain proposed follow-up work.
+
+## Implemented delivery semantics
+
+Delivery is **durable at-least-once**, with:
+
+- stable Telegram event identity `chat_id:message_id`;
+- one durable row per `(event_id, recipient_uid)`;
+- no send for a row already recorded as `delivered`;
+- a random `lease_token` fencing every outbox attempt;
+- bounded Telegram send duration shorter than the delivery lease;
+- a finite retry budget and permanent `dead` state.
+
+Exactly-once delivery is not claimed. A crash after Telegram accepts a message
+but before SQLite records `delivered` can still produce a duplicate after
+lease recovery. Telethon's high-level `send_message` creates its MTProto
+`random_id` internally and does not expose a simple durable reuse mechanism
+across process restarts. Reusing it would require replacing the current path
+with raw MTProto requests and persisting additional request state. That change
+is not justified for this reliability slice.
+
+The current execution model has one sender source of truth: routing only
+persists outbox rows, while the background outbox worker performs Telegram
+sends. Routing reports `queued_uids`; it never reports them as delivered.
+
+Queue and outbox claims use independent expiring leases and fencing tokens.
+Legacy production rows already in `queue.status='processing'` receive nullable
+lease columns during migration but are not automatically reclaimed because
+their `lease_until` remains null. Queue lease/reclaim is enabled only in
+outbox mode (`WRITE_OUTBOX=1`, `DELIVERY_OUTBOX_WORKER=1`); compatibility mode
+`0/0` keeps legacy no-reclaim behavior.
 
 ## Goals
 
@@ -97,22 +129,24 @@ dead       - invalid payload or exhausted retries
 
 Technical AI failures must never be represented as `relevant=false`.
 
-## Proposed delivery outbox
+## Implemented delivery outbox
 
 ```sql
 CREATE TABLE delivery_outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
     recipient_uid INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
     lease_until TEXT,
+    lease_token TEXT,
     telegram_message_id INTEGER,
     last_error TEXT,
-    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    payload_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     delivered_at TEXT,
-    FOREIGN KEY(event_id) REFERENCES queue(id),
     UNIQUE(event_id, recipient_uid)
 );
 
@@ -123,7 +157,8 @@ ON delivery_outbox(status, next_attempt_at, id);
 Routing inserts one row per matching recipient with `INSERT ... ON CONFLICT DO
 NOTHING`. Creation of all outbox rows and completion of the queue event happen
 in one transaction. A delivery worker claims and retries recipients
-independently.
+independently. Every claim replaces `lease_token`; delivered/retry/dead
+transitions require the same token and verify that exactly one row changed.
 
 Permanent Telegram errors (`UserIsBlockedError`,
 `InputUserDeactivatedError`, irrecoverable `PeerIdInvalidError`) transition
@@ -190,8 +225,8 @@ Feature flags should separate rollout:
 ```text
 WRITE_OUTBOX=0/1
 DELIVERY_OUTBOX_WORKER=0/1
-QUEUE_LEASE_RECLAIM=0/1
 ```
 
-Rollback first disables workers through flags; destructive schema downgrade is
-not part of the normal rollback path.
+Only `0/0` and `1/1` are valid. Rollback first disables outbox mode through
+both flags; destructive schema downgrade is not part of the normal rollback
+path.

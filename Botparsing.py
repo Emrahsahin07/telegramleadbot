@@ -63,7 +63,14 @@ from filters import (
     infer_region_from_text, extract_transfer_route, _all_locations_from_text,
     contains_contact,
 )
-from delivery import send_lead_to_users, WORD_RE, _stem
+from delivery import (
+    send_lead_to_users,
+    delivery_outbox_worker,
+    validate_delivery_mode,
+    configure_delivery_runtime,
+    WORD_RE,
+    _stem,
+)
 
 from constants import BUYER_TRIGGERS, OFFER_TERMS
 from config import ADMIN_ID, categories, metrics, logger, bot_client, subscriptions, save_subscriptions, CANONICAL_LOCATIONS
@@ -891,7 +898,8 @@ async def process_message(event):
                     "regions": sorted(candidate_regions),
                     "subcategory": cla.get('subcategory'),
                     "confidence": confidence,
-                    "explanation": cla.get('explanation')
+                    "explanation": cla.get('explanation'),
+                    "event_id": message_queue.build_delivery_event_id(chat_id, event.id),
                 }))
             except Exception as e:
                 logger.error(f"Failed to send review to admin: {e}")
@@ -963,7 +971,7 @@ async def process_message(event):
         )
         return
 
-    sent_uids, failed_uids = await send_lead_to_users(
+    delivery_result = await send_lead_to_users(
         chat_id=chat_id,
         group_name=group_name,
         group_username=getattr(dialog, "username", None),
@@ -977,15 +985,22 @@ async def process_message(event):
         detected_category=assigned_cat,
         subcategory=cla.get("subcategory"),
         route=route,
-        confidence=cla.get("confidence", 0.9)  # Pass confidence level
+        confidence=cla.get("confidence", 0.9),  # Pass confidence level
+        event_id=message_queue.build_delivery_event_id(chat_id, event.id),
+        queue_id=getattr(event, "queue_db_id", None),
+        queue_lease_token=getattr(event, "queue_lease_token", None),
     )
 
-    sent_count = len(sent_uids)
-    extra_info = f"exp='{cla.get('explanation')}' sent={sent_count}"
-    if sent_count and failed_uids:
-        extra_info += f" failed={len(failed_uids)}"
+    delivered_count = len(delivery_result.delivered_uids)
+    queued_count = len(delivery_result.queued_uids)
+    extra_info = (
+        f"exp='{cla.get('explanation')}' "
+        f"delivered={delivered_count} queued={queued_count}"
+    )
+    if delivery_result.failed_uids:
+        extra_info += f" failed={len(delivery_result.failed_uids)}"
     sent_log = log_evt(
-        "SENT",
+        "QUEUED" if delivery_result.mode == "outbox" else "SENT",
         chat_id=chat_id,
         group_name=group_name,
         region=cla.get('region'),
@@ -997,16 +1012,17 @@ async def process_message(event):
     )
     if sent_log:
         logger.info(sent_log)
-    if failed_uids:
-        logger.warning(f"Lead send failures: {failed_uids}")
+    if delivery_result.failed_uids:
+        logger.warning(f"Lead send failures: {delivery_result.failed_uids}")
 
 # Global variables for bot identity (moved here from later in file)
 
-async def worker(name):
+async def worker(name, delivery_mode):
     logger.info(f"⚙️ Worker {name} started")
     while True:
         queue_row = None
         queue_db_id = None
+        queue_lease_token = None
         event_dict = None
         try:
             # Dequeue next event from SQLite
@@ -1014,7 +1030,7 @@ async def worker(name):
             if not queue_row:
                 await asyncio.sleep(0.1)
                 continue
-            queue_db_id, event_dict = queue_row
+            queue_db_id, event_dict, queue_lease_token = queue_row
 
             # Воссоздаём событие
             # Создаём фиктивный объект события (минимальный)
@@ -1031,6 +1047,8 @@ async def worker(name):
                     self.is_forwarded = bool(data.get("is_forwarded"))
                     self.fwd_from_name = data.get("fwd_from_name")
                     self.fwd_from_id = data.get("fwd_from_id")
+                    self.queue_db_id = queue_db_id
+                    self.queue_lease_token = queue_lease_token
 
                 @property
                 def sender_id(self):
@@ -1063,15 +1081,29 @@ async def worker(name):
             logger.error(f"Worker {name} error: {e}\n{tb}")
             if queue_db_id is not None:
                 try:
-                    await message_queue.mark_failed(queue_db_id, str(e))
+                    if delivery_mode == "outbox":
+                        await message_queue.mark_queue_retry(
+                            queue_db_id,
+                            queue_lease_token,
+                            str(e),
+                        )
+                    else:
+                        await message_queue.mark_queue_failed(
+                            queue_db_id,
+                            queue_lease_token,
+                            str(e),
+                        )
                 except Exception as mark_err:
-                    logger.error(f"Queue mark_failed error: {mark_err}")
+                    logger.error(f"Queue mark_retry error: {mark_err}")
             from config import notify_admin_error
             asyncio.create_task(notify_admin_error(f"Worker {name} error: {e}\n{tb}"))
         else:
             if queue_db_id is not None:
                 try:
-                    await message_queue.mark_completed(queue_db_id)
+                    await message_queue.mark_completed(
+                        queue_db_id,
+                        queue_lease_token,
+                    )
                 except Exception as mark_err:
                     logger.error(f"Queue mark_completed error: {mark_err}")
 
@@ -1094,7 +1126,11 @@ async def watch_categories():
             await asyncio.sleep(10)
 async def main():
     global SELF_ID, SELF_USERNAME
-    
+
+    delivery_mode = validate_delivery_mode()
+    configure_delivery_runtime(delivery_mode)
+    startup_complete = False
+
     try:
         # Инициализация системы обратной связи
         await initialize_feedback_system()
@@ -1180,14 +1216,19 @@ async def main():
 
         # Start message workers
         for i in range(MAX_WORKERS):
-            asyncio.create_task(worker(f"worker-{i}"))
+            asyncio.create_task(worker(f"worker-{i}", delivery_mode))
         logger.info(f"🧵 Started {MAX_WORKERS} worker(s)")
+
+        if delivery_mode == "outbox":
+            asyncio.create_task(delivery_outbox_worker())
+            logger.info("📤 Durable delivery outbox worker started")
 
         if WATCHDOG_ENABLED:
             asyncio.create_task(watchdog_keepalive_task())
             logger.info("🩺 Systemd watchdog task started")
 
         _sd_notify("READY=1")
+        startup_complete = True
 
         # Run both clients until disconnected with improved error handling
         try:
@@ -1225,6 +1266,8 @@ async def main():
         import traceback
         tb = traceback.format_exc()
         logger.error(f"Startup error details: {tb}")
+        if not startup_complete:
+            raise
     finally:
         # Final cleanup
         try:

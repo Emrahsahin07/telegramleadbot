@@ -145,7 +145,6 @@ async def handle_review_callback(event):
         lead = pending_leads.get(lead_id)
         if lead:
             # Отправляем подписчикам
-            metrics['leads_sent'] += 1
             logger.info(f"✅ Админ одобрил лид: {data}")
             
             # Сохраняем админское решение в feedback.db для обучения ИИ
@@ -162,7 +161,7 @@ async def handle_review_callback(event):
             sender_username = lead.get("sender_username", "")
             sender_id = lead.get("sender_id", 0)
             display_name = f"@{sender_username}" if sender_username else "Проверено админом"
-            sent_uids, failed_uids = await send_lead_to_users(
+            delivery_result = await send_lead_to_users(
                 chat_id=chat_id,
                 group_name=group_name,
                 group_username=None,
@@ -176,10 +175,23 @@ async def handle_review_callback(event):
                 detected_category=(lead.get("category") or lead.get("detected_category")),
                 subcategory=lead.get("subcategory"),
                 route=lead.get("route"),
-                confidence=lead.get("confidence", 0.9)  # Admin-approved leads should have high confidence
+                confidence=lead.get("confidence", 0.9),  # Admin-approved leads should have high confidence
+                event_id=lead.get("event_id"),
             )
-            logger.info(f"REVIEW_SENT | users={len(sent_uids)} failed={len(failed_uids)} | lead={lead_id}")
-            await event.answer("✅ Лид одобрен и отправлен пользователям!")
+            logger.info(
+                "REVIEW_DELIVERY | delivered=%s queued=%s failed=%s | lead=%s",
+                len(delivery_result.delivered_uids),
+                len(delivery_result.queued_uids),
+                len(delivery_result.failed_uids),
+                lead_id,
+            )
+            if delivery_result.mode == "outbox":
+                metrics["leads_queued"] += 1
+                await event.answer("✅ Лид одобрен и поставлен в очередь доставки!")
+            else:
+                if delivery_result.delivered_uids:
+                    metrics["leads_sent"] += 1
+                await event.answer("✅ Лид одобрен и отправлен пользователям!")
             # Удаляем сообщение
             try:
                 await event.delete()

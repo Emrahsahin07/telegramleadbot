@@ -11,7 +11,15 @@ from telethon.errors import (
 )
 
 import delivery
-from tests.helpers import RecordingBot, active_prefs, expired_trial_prefs, lead_kwargs
+from tests.helpers import (
+    RecordingBot,
+    active_prefs,
+    configure_temp_queue,
+    create_queue_event,
+    expired_trial_prefs,
+    lead_kwargs,
+    make_outbox_retries_due,
+)
 
 
 def configure_delivery(monkeypatch: pytest.MonkeyPatch, bot: RecordingBot, users: dict) -> None:
@@ -53,10 +61,10 @@ async def test_pass_recipient_error_does_not_stop_remaining_delivery(
         {"101": active_prefs(), "202": active_prefs()},
     )
 
-    sent, failed = await delivery.send_lead_to_users(**lead_kwargs())
+    result = await delivery.send_lead_to_users(**lead_kwargs())
 
-    assert sent == [202]
-    assert failed == [101]
+    assert result.delivered_uids == [202]
+    assert result.failed_uids == [101]
     assert bot.calls == [101, 202]
 
 
@@ -73,10 +81,10 @@ async def test_pass_blocked_user_during_trial_notice_does_not_stop_delivery(
         {"101": expired_trial_prefs(), "202": active_prefs()},
     )
 
-    sent, failed = await delivery.send_lead_to_users(**lead_kwargs())
+    result = await delivery.send_lead_to_users(**lead_kwargs())
 
-    assert sent == [202]
-    assert failed == []
+    assert result.delivered_uids == [202]
+    assert result.failed_uids == []
     assert bot.calls == [101, 202]
 
 
@@ -114,19 +122,12 @@ async def test_xfail_trial_notice_error_does_not_stop_remaining_delivery(
     assert 202 in bot.calls
 
 
-@pytest.mark.known_bug
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Known bug: retrying a partially delivered lead resends it to recipients "
-        "that already succeeded because there is no per-recipient idempotency state"
-    ),
-)
-async def test_xfail_successful_recipient_is_not_duplicated_on_partial_retry(
+@pytest.mark.correct
+async def test_pass_successful_recipient_is_not_duplicated_on_partial_retry(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
-    """XFAIL: recipient 202 must not receive the same event twice."""
+    """PASS: durable recipient state prevents duplicate delivery after retry."""
 
     bot = RecordingBot({101: [TimeoutError("temporary Telegram failure")]})
     configure_delivery(
@@ -134,14 +135,23 @@ async def test_xfail_successful_recipient_is_not_duplicated_on_partial_retry(
         bot,
         {"101": active_prefs(), "202": active_prefs()},
     )
+    await configure_temp_queue(monkeypatch, tmp_path)
+    event_id = await create_queue_event()
+    monkeypatch.setenv("WRITE_OUTBOX", "1")
+    monkeypatch.setenv("DELIVERY_OUTBOX_WORKER", "1")
+    kwargs = lead_kwargs()
+    kwargs["event_id"] = event_id
 
-    first_sent, first_failed = await delivery.send_lead_to_users(**lead_kwargs())
-    second_sent, second_failed = await delivery.send_lead_to_users(**lead_kwargs())
+    routed = await delivery.send_lead_to_users(**kwargs)
+    assert routed.queued_uids == [101, 202]
+    assert bot.calls == []
 
-    assert first_sent == [202]
-    assert first_failed == [101]
-    assert second_sent == [101]
-    assert second_failed == []
+    assert await delivery.deliver_next_outbox(event_id) == ("retry", 101)
+    assert await delivery.deliver_next_outbox(event_id) == ("delivered", 202)
+    await make_outbox_retries_due(event_id)
+    rerouted = await delivery.send_lead_to_users(**kwargs)
+    assert rerouted.queued_uids == []
+    assert await delivery.deliver_next_outbox(event_id) == ("delivered", 101)
     assert bot.calls.count(202) == 1
 
 

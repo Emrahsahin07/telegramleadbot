@@ -40,6 +40,8 @@ os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 os.environ["CLEAR_QUEUE_ON_START"] = "0"
 os.environ["SEND_NOTIFICATIONS"] = "1"
 os.environ["NOTIFY_SEND_ERRORS"] = "0"
+os.environ["WRITE_OUTBOX"] = "0"
+os.environ["DELIVERY_OUTBOX_WORKER"] = "0"
 
 
 @pytest.fixture(autouse=True)
@@ -50,3 +52,5 @@ def no_identity_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BOT_ID", raising=False)
     monkeypatch.setenv("SEND_NOTIFICATIONS", "1")
     monkeypatch.setenv("NOTIFY_SEND_ERRORS", "0")
+    monkeypatch.setenv("WRITE_OUTBOX", "0")
+    monkeypatch.setenv("DELIVERY_OUTBOX_WORKER", "0")
