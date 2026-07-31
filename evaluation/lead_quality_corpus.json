@@ -1,0 +1,49 @@
+[
+  {"id":"buyer_transfer","text":"Нужен трансфер из аэропорта Анталии в Кемер","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия","Кемер"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_excursion","text":"Подскажите индивидуальную экскурсию в Стамбуле","title":"Общий чат","relevant":true,"category":"экскурсии","location":["Стамбул"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_yacht","text":"Хочу снять яхту в Кемере на субботу","title":"Общий чат","relevant":true,"category":"аренда яхт","location":["Кемер"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_realty","text":"Ищу квартиру в Анталии на три месяца","title":"Общий чат","relevant":true,"category":"недвижимость","subcategory":"аренда","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_beauty","text":"Нужен маникюр в Аланье сегодня","title":"Общий чат","relevant":true,"category":"бьюти","subcategory":"маникюр","location":["Аланья"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_cleaning","text":"Нужна генеральная уборка квартиры в Мерсине","title":"Общий чат","relevant":true,"category":"клининг","location":["Мерсин"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_car","text":"Хочу арендовать машину в Анталии на неделю","title":"Общий чат","relevant":true,"category":"аренда авто","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_residence","text":"Кто может помочь оформить ВНЖ в Турции?","title":"Общий чат","relevant":true,"category":"внж","location":["Турция"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_insurance","text":"Нужна медицинская страховка в Анталии, кто поможет?","title":"Общий чат","relevant":true,"category":"страховки","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"buyer_master","text":"Требуется электрик в Сиде, срочно","title":"Общий чат","relevant":true,"category":"услуги_мастеров","subcategory":"электрика","location":["Сиде"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+
+  {"id":"short_taxi","text":"Такси Анталия?","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"short_electrician","text":"Электрик? Анталия","title":"Общий чат","relevant":true,"category":"услуги_мастеров","subcategory":"электрика","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"short_taxi_group_location","text":"Такси?","title":"Анталия чат","relevant":true,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"borderline_realty","text":"Квартира Анталия?","title":"Общий чат","relevant":true,"category":"недвижимость","location":["Анталия"],"should_reach_ai":true,"expected_decision":"shadow_borderline","confidence":0.65},
+
+  {"id":"group_location_only","text":"Нужна уборка квартиры завтра","title":"Анталия общение","relevant":true,"category":"клининг","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"missing_location","text":"Нужен трансфер завтра утром","title":"Общий чат","relevant":true,"category":"трансфер","location":[],"should_reach_ai":false,"expected_decision":"reject","confidence":0.92},
+  {"id":"location_typo","text":"Нужен трансфер в Анталье","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+
+  {"id":"hashtag_buyer","text":"#трансфер Нужен в Анталии сегодня","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"hashtag_offer","text":"Предлагаю трансфер #анталия #такси #аэропорт #отдых @demo_service","title":"Общий чат","relevant":false,"category":"трансфер","location":["Анталия"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+  {"id":"multi_city_transfer","text":"Кто может забрать из Анталии и довезти до Сиде?","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия","Сиде"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"airport_code_transfer","text":"Нужна машина из AYT до Сиде на троих","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия","Сиде"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+
+  {"id":"synonym_driver","text":"Кто может отвезти семью из Анталии в Кемер?","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия","Кемер"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"synonym_hairdresser","text":"Ищу парикмахера в Аланье на завтра","title":"Общий чат","relevant":true,"category":"бьюти","location":["Аланья"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"synonym_cleaning","text":"Нужен человек привести дом в порядок в Анталии","title":"Общий чат","relevant":true,"category":"клининг","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"synonym_residence","text":"Кто может помочь легализоваться в Турции?","title":"Общий чат","relevant":true,"category":"внж","location":["Турция"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"synonym_car","text":"Нужны колёса на неделю в Мерсине","title":"Общий чат","relevant":true,"category":"аренда авто","location":["Мерсин"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"synonym_yacht","text":"Хочу выйти в море с капитаном в Кемере","title":"Общий чат","relevant":true,"category":"аренда яхт","location":["Кемер"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+
+  {"id":"offer_transfer","text":"Предлагаю трансфер из аэропорта Анталии, пишите @demo_transfer","title":"Общий чат","relevant":false,"category":"трансфер","location":["Анталия"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+  {"id":"offer_realty","text":"Сдаю квартиру 2+1 в Анталии, 900€, @demo_home","title":"Общий чат","relevant":false,"category":"недвижимость","subcategory":"аренда","location":["Анталия"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+  {"id":"offer_excursion","text":"Провожу экскурсии по Стамбулу, стоимость 50€, бронь @demo_tour","title":"Общий чат","relevant":false,"category":"экскурсии","location":["Стамбул"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+  {"id":"offer_beauty","text":"Делаю маникюр в Аланье, запись @demo_nails","title":"Общий чат","relevant":false,"category":"бьюти","subcategory":"маникюр","location":["Аланья"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+  {"id":"offer_master","text":"Профессиональный электрик в Анталии, выполняю ремонт, пишите @demo_master","title":"Общий чат","relevant":false,"category":"услуги_мастеров","location":["Анталия"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+
+  {"id":"review_transfer","text":"Пользовался трансфером в Анталии, всё было отлично","title":"Общий чат","relevant":false,"category":"трансфер","location":["Анталия"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95},
+  {"id":"recommend_cleaning","text":"Посоветуйте клининг в Анталии","title":"Общий чат","relevant":true,"category":"клининг","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
+  {"id":"discussion_transfer","text":"Как вы считаете, трансфер в Анталии сейчас дорогой?","title":"Общий чат","relevant":false,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"reject","confidence":0.95},
+  {"id":"discussion_beauty","text":"В Анталии много салонов красоты","title":"Общий чат","relevant":false,"category":"бьюти","location":["Анталия"],"should_reach_ai":true,"expected_decision":"reject","confidence":0.95},
+  {"id":"bad_insurance_experience","text":"Нужен совет: страховка в Анталии оказалась плохой","title":"Общий чат","relevant":false,"category":"страховки","location":["Анталия"],"should_reach_ai":true,"expected_decision":"reject","confidence":0.95},
+
+  {"id":"polysemy_filming","text":"Сниму видео про квартиру в Анталии, ищу идеи для сюжета","title":"Общий чат","relevant":false,"category":null,"location":["Анталия"],"should_reach_ai":true,"expected_decision":"reject","confidence":0.95},
+  {"id":"rideshare_offer","text":"Ищу попутчиков из Анталии в Кемер, еду на своей машине","title":"Общий чат","relevant":false,"category":"трансфер","location":["Анталия","Кемер"],"should_reach_ai":true,"expected_decision":"reject","confidence":0.95},
+  {"id":"announcement","text":"Приветствуем на доске объявлений Анталии, здесь вы можете размещать услуги","title":"Общий чат","relevant":false,"category":null,"location":["Анталия"],"should_reach_ai":false,"expected_decision":"reject","confidence":0.95}
+]

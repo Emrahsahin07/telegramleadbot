@@ -234,12 +234,8 @@ for k, v in CITY_KEYWORDS.items():
 
 
 def _alias_regex(alias: str) -> str:
-    """Regex for alias tolerant to Russian endings. Latin remains strict."""
-    alias = alias.lower()
-    base = re.escape(alias)
-    if re.search(r"[a-z]", alias):
-        return base
-    return base + r"[а-яё]*"
+    """Return an exact alias pattern; safe inflections are listed in config."""
+    return re.escape(alias.lower())
 
 # Airports
 AIRPORT_CODES = {
