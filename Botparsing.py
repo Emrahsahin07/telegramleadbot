@@ -177,6 +177,11 @@ def _normalize_for_dedup(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def _normalize_hashtags(text: str) -> str:
+    """Keep hashtag words available to the normal location/category pipeline."""
+    return re.sub(r"#(?=\w)", "", text or "")
+
+
 def _should_drop_duplicate(normalized_text: str) -> bool:
     if DEDUP_WINDOW_SECONDS <= 0 or not normalized_text:
         return False
@@ -469,8 +474,7 @@ async def process_message(event):
         metrics['forward_loop_blocked'] += 1
         return
     text = event.raw_text or ""
-    # Remove hashtags to avoid false matches
-    clean_text = re.sub(r'#\w+', '', text)
+    clean_text = _normalize_hashtags(text)
     lower_text = clean_text.lower()
 
     # Guard against processing our own outbound notifications (avoid loops/duplicates)
