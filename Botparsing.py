@@ -87,7 +87,7 @@ from decision_policy import (
     decide_lead,
 )
 
-from constants import BUYER_TRIGGERS, OFFER_TERMS
+from constants import BUYER_TRIGGERS, OFFER_TERMS, REVIEW_TERMS, SELLER_TERMS
 from config import ADMIN_ID, categories, metrics, logger, bot_client, subscriptions, save_subscriptions, CANONICAL_LOCATIONS
 import message_queue
 
@@ -180,6 +180,27 @@ def _normalize_for_dedup(text: str) -> str:
 def _normalize_hashtags(text: str) -> str:
     """Keep hashtag words available to the normal location/category pipeline."""
     return re.sub(r"#(?=\w)", "", text or "")
+
+
+STRONG_BUYER_INTENT_TERMS = (
+    "нужен", "нужна", "нужны",
+    "ищу", "ищем", "ищется",
+    "хочу", "хотим",
+    "сниму", "снимем", "снять",
+    "требуется", "кто может", "как добраться",
+)
+
+
+def _has_strong_buyer_intent(text_lower: str) -> bool:
+    return any(_contains_word(text_lower, term) for term in STRONG_BUYER_INTENT_TERMS)
+
+
+def _can_bypass_regional_keyword_gate(text_lower: str, region: str | None) -> bool:
+    """Allow only clean, location-bound buyer requests to reach AI."""
+    if region not in CANONICAL_LOCATIONS or not _has_strong_buyer_intent(text_lower):
+        return False
+    contradictions = (*OFFER_TERMS, *REVIEW_TERMS, *SELLER_TERMS)
+    return not any(term in text_lower for term in contradictions)
 
 
 def _should_drop_duplicate(normalized_text: str) -> bool:
@@ -605,6 +626,7 @@ async def process_message(event):
         if any(r in prefs.get("locations", []) for r in candidate_regions)
     ]
 
+    regional_keyword_bypass = False
     # Tighten only if we actually have subscribers for the candidate regions
     if subscribers_for_region:
         regional_keyword_stems = {
@@ -614,15 +636,19 @@ async def process_message(event):
             for kw in categories.get(cat, {}).get("keywords", [])
         }
         if not stems_in_text.intersection(regional_keyword_stems):
-            metrics['no_regional_keyword_match'] += 1
-            logger.debug(log_evt(
-                "DROP_NOREGK",
-                chat_id=chat_id,
-                group_name=group_name,
-                region=",".join(candidate_regions) or None,
-                msg=lower_text[:180]
-            ))
-            return
+            if _can_bypass_regional_keyword_gate(lower_text, region):
+                regional_keyword_bypass = True
+                metrics['regional_keyword_bypass'] += 1
+            else:
+                metrics['no_regional_keyword_match'] += 1
+                logger.debug(log_evt(
+                    "DROP_NOREGK",
+                    chat_id=chat_id,
+                    group_name=group_name,
+                    region=",".join(candidate_regions) or None,
+                    msg=lower_text[:180]
+                ))
+                return
     # else: no subscribers for candidate regions yet — don't drop here; route/AI may find deliverable region later
     # Build stems set from all these subscribers' categories и их подкатегорий
     stems_for_users = set()
@@ -655,14 +681,15 @@ async def process_message(event):
     user_stems = {s.lower() for s in stems_for_users}
     # Detect and log first matched stem
     matched_stem = next((s for s in user_stems if s in stems_in_text), None)
-    if not matched_stem:
+    if not matched_stem and not regional_keyword_bypass:
         metrics['no_category_match'] += 1
         logger.debug("Drop: no category match for users")
         return
-    matched_cat = stem_to_category.get(matched_stem, "?")
-    kw_log = log_evt("KW", chat_id=chat_id, group_name=group_name, kw=matched_stem, cat=matched_cat, msg=text[:180])
-    if kw_log:
-        logger.debug(kw_log)
+    if matched_stem:
+        matched_cat = stem_to_category.get(matched_stem, "?")
+        kw_log = log_evt("KW", chat_id=chat_id, group_name=group_name, kw=matched_stem, cat=matched_cat, msg=text[:180])
+        if kw_log:
+            logger.debug(kw_log)
 
     # ВРЕМЕННО ОТКЛЮЧЕНО: проверка TOP-level keywords
     # if not any(s in stems_in_text for s in parent_category_stems):
@@ -954,7 +981,9 @@ async def process_message(event):
     except Exception:
         assigned_top_kw_stems = set()
     if assigned_top_kw_stems and not any(s in stems_in_text for s in assigned_top_kw_stems):
-        if cla.get('confidence', 0.0) >= 0.92:
+        if regional_keyword_bypass:
+            metrics['ai_buyer_intent_keyword_bypass'] += 1
+        elif cla.get('confidence', 0.0) >= 0.92:
             metrics['ai_kw_soft_bypass'] += 1
         else:
             metrics['ai_cat_no_kw_match'] += 1
@@ -1023,6 +1052,7 @@ async def process_message(event):
         event_id=message_queue.build_delivery_event_id(chat_id, event.id),
         queue_id=getattr(event, "queue_db_id", None),
         queue_lease_token=getattr(event, "queue_lease_token", None),
+        allow_keyword_bypass=regional_keyword_bypass,
     )
 
     delivered_count = len(delivery_result.delivered_uids)

@@ -403,6 +403,7 @@ async def send_lead_to_users(
     event_id: Union[int, str, None] = None,
     queue_id: Union[int, None] = None,
     queue_lease_token: Union[str, None] = None,
+    allow_keyword_bypass: bool = False,
 ) -> DeliveryResult:
     use_outbox = _outbox_enabled(event_id)
     mode = "outbox" if use_outbox else "legacy"
@@ -559,7 +560,7 @@ async def send_lead_to_users(
         keyword_stems = {_stem(kw.lower()) for kw in keywords}
         text_stems = {_stem(tok) for tok in WORD_RE.findall(text.lower())}
 
-        if not keyword_stems & text_stems:
+        if not allow_keyword_bypass and not keyword_stems & text_stems:
             metrics['pref_category_skipped'] += 1
             logger.debug(f"Drop user {uid}: no keyword stems match")
             continue
