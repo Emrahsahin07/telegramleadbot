@@ -49,7 +49,13 @@ def now_istanbul():
     return datetime.now(timezone.utc) + timedelta(hours=3)
 
 import keep_alive  # стартует Flask-сервер для keep-alive
-from ai_utils import classify_text_with_ai, _classify_cache, apply_overrides, update_categories
+from ai_utils import (
+    AIClassificationTechnicalError,
+    classify_text_with_ai,
+    _classify_cache,
+    apply_overrides,
+    update_categories,
+)
 from connection_manager import add_telegram_client, connect_all_clients, start_connection_monitoring, disconnect_all_clients
 
 import openai
@@ -392,6 +398,35 @@ async def handler_bot(event):
     except Exception as e:
         logger.error(f"Bot handler enqueue error: {e}")
 
+async def _classify_message_with_ai(
+    ai_input_text,
+    cats_to_use,
+    ai_timeout,
+):
+    """Run the blocking classifier and preserve technical failures as typed errors."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                classify_text_with_ai,
+                ai_input_text,
+                cats_to_use,
+                CANONICAL_LOCATIONS,
+                client_ai,
+            ),
+            timeout=ai_timeout,
+        )
+    except AIClassificationTechnicalError:
+        raise
+    except asyncio.TimeoutError as error:
+        raise AIClassificationTechnicalError(
+            f"AI classification timed out after {ai_timeout}s"
+        ) from error
+    except Exception as error:
+        raise AIClassificationTechnicalError(
+            f"AI classification call failed: {type(error).__name__}: {error}"
+        ) from error
+
+
 async def process_message(event):
     metrics['received'] += 1
     # Only groups and channels
@@ -721,15 +756,10 @@ async def process_message(event):
             base_cats.append(category_heuristic)
         cats_to_use = base_cats
 
-        cla = await asyncio.wait_for(
-            asyncio.to_thread(
-                classify_text_with_ai,
-                ai_input_text,
-                cats_to_use,
-                CANONICAL_LOCATIONS,
-                client_ai
-            ),
-            timeout=ai_timeout
+        cla = await _classify_message_with_ai(
+            ai_input_text,
+            cats_to_use,
+            ai_timeout,
         )
         # --- AI_OK log ---
         logger.debug(
@@ -740,17 +770,22 @@ async def process_message(event):
             (cla or {}).get("region"),
             ((cla or {}).get("explanation") or "")[:80]
         )
-    except asyncio.TimeoutError:
-        logger.error(f"AI_TIMEOUT: Classification timed out after {ai_timeout}s")
+    except AIClassificationTechnicalError as error:
+        logger.error("AI_TECHNICAL_ERROR: %s", error)
         from config import notify_admin_error
-        asyncio.create_task(notify_admin_error(f"AI_TIMEOUT: Classification timed out for message: {ai_input_text[:100]}"))
-        return
+        asyncio.create_task(
+            notify_admin_error(
+                f"AI_TECHNICAL_ERROR: {error}; message: {ai_input_text[:100]}"
+            )
+        )
+        raise
     except Exception as e:
         logger.error(f"AI_ERROR: {e}")
-        # Уведомляем админа
         from config import notify_admin_error
         asyncio.create_task(notify_admin_error(f"AI_ERROR: {e}"))
-        return
+        raise AIClassificationTechnicalError(
+            f"AI classification setup failed: {type(e).__name__}: {e}"
+        ) from e
 
     # Override AI classification with heuristics and post-hoc rules
     if isinstance(cla, dict):

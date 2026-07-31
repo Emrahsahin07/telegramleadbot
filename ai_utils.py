@@ -239,6 +239,37 @@ def _sanitize_result(result: dict) -> dict:
     return result
 
 
+class AIClassificationTechnicalError(RuntimeError):
+    """AI infrastructure/contract failure that must retry the queue event."""
+
+
+def _validate_ai_result(result: dict) -> None:
+    """Validate the existing strict response contract without changing its rules."""
+    if not isinstance(result, dict):
+        raise ValueError("AI response must be a JSON object")
+    required = {
+        "relevant": bool,
+        "explanation": str,
+    }
+    for field, expected_type in required.items():
+        if field not in result or not isinstance(result[field], expected_type):
+            raise ValueError(
+                f"AI response field {field!r} must be {expected_type.__name__}"
+            )
+    for field in ("category", "subcategory", "region"):
+        if field not in result or (
+            result[field] is not None and not isinstance(result[field], str)
+        ):
+            raise ValueError(f"AI response field {field!r} must be string or null")
+    confidence = result.get("confidence")
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not 0.0 <= float(confidence) <= 1.0
+    ):
+        raise ValueError("AI response field 'confidence' must be a number from 0 to 1")
+
+
 def calibrate_confidence(raw_confidence: float) -> float:
     """Piecewise calibration of confidence based on observed buckets."""
     if raw_confidence >= 0.9:
@@ -442,6 +473,46 @@ def classify_text_with_ai(text: str,
         response_kwargs["prompt"] = prompt_payload
     if instructions_arg is not NOT_GIVEN:
         response_kwargs["instructions"] = instructions_arg
+
+    def classify_with_chat_fallback(primary_error: Exception) -> dict:
+        try:
+            _apply_rate_limit()
+            cc = client_ai.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            try:
+                content = (
+                    cc.choices[0].message.content
+                    if getattr(cc.choices[0].message, "content", None)
+                    else cc.choices[0].message["content"]
+                )
+            except Exception:
+                content = str(cc)
+            parsed = _try_parse_ai_json(content or "")
+            if parsed is None:
+                raise ValueError("ChatCompletions returned non-JSON content")
+            _validate_ai_result(parsed)
+            _log_usage(model_name, cc, getattr(cc, "id", None))
+            result = _sanitize_result(parsed)
+            raw_conf = result.get("confidence", 0.0)
+            result["confidence"] = calibrate_confidence(raw_conf)
+            result = _sanitize_result(result)
+            if len(_classify_cache) >= _CLASSIFY_CACHE_MAXSIZE:
+                _classify_cache.pop(next(iter(_classify_cache)))
+            _classify_cache[key] = {"ts": time.time(), "payload": result.copy()}
+            return result
+        except Exception as fallback_error:
+            raise AIClassificationTechnicalError(
+                "AI classification failed after primary and fallback attempts: "
+                f"primary={type(primary_error).__name__}: {primary_error}; "
+                f"fallback={type(fallback_error).__name__}: {fallback_error}"
+            ) from fallback_error
+
     try:
         resp = _responses_create_with_retry(
             client_ai,
@@ -449,48 +520,7 @@ def classify_text_with_ai(text: str,
         )
     except Exception as e:
         logger.warning("RESPONSES_CALL_FAILED: %s", e, exc_info=True)
-        # Fallback 1: Chat Completions with response_format json_object
-        try:
-            _apply_rate_limit()
-            fallback_user = user_prompt
-            cc = client_ai.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": fallback_user},
-                ],
-                response_format={"type": "json_object"},
-            )
-            content = None
-            try:
-                content = cc.choices[0].message.content if getattr(cc.choices[0].message, 'content', None) else cc.choices[0].message["content"]
-            except Exception:
-                # try alternative attribute structure
-                content = str(cc)
-            parsed = _try_parse_ai_json(content or "")
-            if not parsed:
-                raise RuntimeError("ChatCompletions returned non-JSON content")
-            _log_usage(model_name, cc, getattr(cc, 'id', None))
-            result = _sanitize_result(parsed)
-            raw_conf = result.get("confidence", 0.0)
-            result["confidence"] = calibrate_confidence(raw_conf)
-            result = _sanitize_result(result)
-            # Cache and return
-            if len(_classify_cache) >= _CLASSIFY_CACHE_MAXSIZE:
-                _classify_cache.pop(next(iter(_classify_cache)))
-            _classify_cache[key] = {"ts": time.time(), "payload": result.copy()}
-            return result
-        except Exception as e2:
-            # Fallback 2: plain parsing failure
-            return {
-                "relevant": False,
-                "category": None,
-                "subcategory": None,
-                "region": None,
-                "explanation": f"OpenAI error: {e} | fallback: {e2}",
-                "confidence": 0.0,
-                "accepted": False,
-            }
+        return classify_with_chat_fallback(e)
     # Token usage dedicated log
     _log_usage(model_name, resp, getattr(resp, 'id', None))
     # Prefer consolidated output_text helper, fallback to joining output items
@@ -512,19 +542,13 @@ def classify_text_with_ai(text: str,
     raw_model_output = content
     result = _try_parse_ai_json(content)
     if result is None:
-        # Fallback: return safe default with raw included for trace
-        return {
-            "relevant": False,
-            "category": None,
-            "subcategory": None,
-            "region": None,
-            "explanation": "Ошибка парсинга ответа ИИ",
-            "confidence": 0.0,
-            "raw": content,
-            "accepted": False,
-            "raw_prompt": raw_prompt,
-            "raw_model_output": raw_model_output,
-        }
+        return classify_with_chat_fallback(
+            ValueError("Responses API returned non-JSON content")
+        )
+    try:
+        _validate_ai_result(result)
+    except ValueError as error:
+        return classify_with_chat_fallback(error)
     # Sanitize, calibrate, and sanitize again (single clear flow)
     result = _sanitize_result(result)
     raw_conf = result.get("confidence", 0.0)
@@ -652,6 +676,7 @@ def _stem_in_text(needle: str, stems_set: set[str]) -> bool:
 
 # --- Exports ---------------------------------------------------------------
 __all__ = [
+    "AIClassificationTechnicalError",
     "classify_text_with_ai",
     "apply_overrides",
     "_classify_cache",
