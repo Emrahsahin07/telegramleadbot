@@ -88,7 +88,7 @@ async def test_pass_blocked_user_during_trial_notice_does_not_stop_delivery(
     assert bot.calls == [101, 202]
 
 
-@pytest.mark.known_bug
+@pytest.mark.correct
 @pytest.mark.parametrize(
     "recipient_error",
     [
@@ -96,15 +96,7 @@ async def test_pass_blocked_user_during_trial_notice_does_not_stop_delivery(
         pytest.param(PeerIdInvalidError(request=None), id="peer-invalid"),
     ],
 )
-@pytest.mark.xfail(
-    strict=True,
-    raises=(InputUserDeactivatedError, PeerIdInvalidError),
-    reason=(
-        "Known bug: the trial-expiry notification path handles UserIsBlockedError "
-        "but lets deactivated/invalid-peer errors abort delivery to later recipients"
-    ),
-)
-async def test_xfail_trial_notice_error_does_not_stop_remaining_delivery(
+async def test_pass_trial_notice_error_does_not_stop_remaining_delivery(
     monkeypatch: pytest.MonkeyPatch,
     recipient_error: Exception,
 ) -> None:
@@ -117,9 +109,11 @@ async def test_xfail_trial_notice_error_does_not_stop_remaining_delivery(
         {"101": expired_trial_prefs(), "202": active_prefs()},
     )
 
-    await delivery.send_lead_to_users(**lead_kwargs())
+    result = await delivery.send_lead_to_users(**lead_kwargs())
 
-    assert 202 in bot.calls
+    assert result.delivered_uids == [202]
+    assert result.failed_uids == []
+    assert bot.calls == [101, 202]
 
 
 @pytest.mark.correct
@@ -155,7 +149,7 @@ async def test_pass_successful_recipient_is_not_duplicated_on_partial_retry(
     assert bot.calls.count(202) == 1
 
 
-@pytest.mark.known_bug
+@pytest.mark.correct
 @pytest.mark.parametrize(
     ("bad_field", "bad_value"),
     [
@@ -163,20 +157,13 @@ async def test_pass_successful_recipient_is_not_duplicated_on_partial_retry(
         pytest.param("trial_start", "not-a-date", id="trial-start"),
     ],
 )
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason=(
-        "Known bug: malformed subscription timestamps raise before the delivery "
-        "loop can continue to healthy recipients"
-    ),
-)
-async def test_xfail_malformed_subscription_does_not_block_other_recipients(
+async def test_pass_malformed_subscription_does_not_block_other_recipients(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     bad_field: str,
     bad_value: str,
 ) -> None:
-    """XFAIL: invalid state for recipient 101 must be isolated from recipient 202."""
+    """Invalid state for recipient 101 is logged and isolated from recipient 202."""
 
     malformed = {
         "categories": ["трансфер"],
@@ -191,6 +178,9 @@ async def test_xfail_malformed_subscription_does_not_block_other_recipients(
         {"101": malformed, "202": active_prefs()},
     )
 
-    await delivery.send_lead_to_users(**lead_kwargs())
+    result = await delivery.send_lead_to_users(**lead_kwargs())
 
-    assert 202 in bot.calls
+    assert result.delivered_uids == [202]
+    assert result.failed_uids == []
+    assert bot.calls == [202]
+    assert f"invalid {bad_field}" in caplog.text

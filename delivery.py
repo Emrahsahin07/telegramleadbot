@@ -496,6 +496,16 @@ async def send_lead_to_users(
                     except UserIsBlockedError:
                         logger.info(f"User {uid} blocked the bot during trial expiry notice; skipping notification")
                         continue
+                    except InputUserDeactivatedError:
+                        logger.info(
+                            f"User {uid} is deleted/deactivated during trial expiry notice; skipping notification"
+                        )
+                        continue
+                    except PeerIdInvalidError:
+                        logger.info(
+                            f"User {uid} has invalid Telegram peer during trial expiry notice; skipping notification"
+                        )
+                        continue
                     async with _subscription_lock:
                         prefs['trial_expired_notified'] = True
                         # Save updated subscriptions

@@ -200,7 +200,10 @@ def parse_iso_datetime(value: str | None) -> datetime | None:
     """Parse ISO datetime and assume UTC when tzinfo is missing."""
     if not value:
         return None
-    dt = datetime.fromisoformat(value)
+    try:
+        dt = datetime.fromisoformat(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
