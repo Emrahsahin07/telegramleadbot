@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from config import logger
+from decision_policy import AUTO_SEND_THRESHOLD
 from constants import (
     BUYER_TRIGGERS,
     SELLER_TERMS,
@@ -110,7 +111,7 @@ try:
 except Exception:
     _PROMPT_CATEGORIES = ["аренда авто", "аренда яхт", "бьюти", "недвижимость", "страховки", "трансфер", "экскурсии"]
 PROMPT_CATEGORY_CONTEXT = "Категории для классификации: " + ", ".join(_PROMPT_CATEGORIES)
-CONF_THRESHOLD = 0.79  # confidence threshold for auto-accepting leads (deliver)
+CONF_THRESHOLD = AUTO_SEND_THRESHOLD
 # Простой ручной кэш, потому что списки (list) не хешируемы для lru_cache
 _classify_cache = {}
 _CLASSIFY_CACHE_MAXSIZE = 5000
@@ -500,6 +501,7 @@ def classify_text_with_ai(text: str,
             _log_usage(model_name, cc, getattr(cc, "id", None))
             result = _sanitize_result(parsed)
             raw_conf = result.get("confidence", 0.0)
+            result["raw_confidence"] = raw_conf
             result["confidence"] = calibrate_confidence(raw_conf)
             result = _sanitize_result(result)
             if len(_classify_cache) >= _CLASSIFY_CACHE_MAXSIZE:
@@ -552,6 +554,7 @@ def classify_text_with_ai(text: str,
     # Sanitize, calibrate, and sanitize again (single clear flow)
     result = _sanitize_result(result)
     raw_conf = result.get("confidence", 0.0)
+    result["raw_confidence"] = raw_conf
     result["confidence"] = calibrate_confidence(raw_conf)
     result = _sanitize_result(result)
     cat_name = result.get("category")

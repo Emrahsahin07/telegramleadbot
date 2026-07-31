@@ -34,6 +34,7 @@ from config import (
 from feedback_manager import feedback_manager
 import message_queue
 import asyncio
+from decision_policy import AUTO_SEND_THRESHOLD
 
 WORD_RE = re.compile(r"[а-яa-zё]+", re.IGNORECASE | re.UNICODE)
 _ru_stemmer = snowballstemmer.stemmer('russian')
@@ -609,8 +610,8 @@ async def send_lead_to_users(
             f"- {safe_text}\n\n"
             f"{region_tag} {ai_category_tag}".strip()
         )
-        # Deliver only if confidence >= 0.79 (per routing contract)
-        if confidence < 0.79:
+        # Deliver only above the centralized automatic-decision threshold.
+        if confidence < AUTO_SEND_THRESHOLD:
             logger.debug(f"Below deliver threshold ({confidence:.2f}) - skip user {uid}; handled by review/discard")
             continue
 

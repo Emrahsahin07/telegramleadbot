@@ -1,5 +1,6 @@
 import os
 import socket
+import hashlib
 try:
     import requests  # optional; network failures are non-fatal
 except Exception:
@@ -76,6 +77,14 @@ from delivery import (
     configure_delivery_runtime,
     WORD_RE,
     _stem,
+)
+from decision_policy import (
+    AUTO_SEND_THRESHOLD,
+    POLICY_VERSION,
+    REJECT,
+    SHADOW_BORDERLINE,
+    SHADOW_BORDERLINE_THRESHOLD,
+    decide_lead,
 )
 
 from constants import BUYER_TRIGGERS, OFFER_TERMS
@@ -269,12 +278,9 @@ REGION_CACHE = {}  # chat_id -> canonical region name
 
 
 # Импортируем функцию отправки лидов из delivery.py
-# Confidence thresholds (unified)
-# - conf >= 0.79 → deliver to users
-# - 0.70 <= conf < 0.79 → admin review
-# - conf < 0.70 → discard
-CONF_THRESHOLD = 0.79
-DISCARD_THRESHOLD = 0.70
+# Backward-compatible aliases; values live only in decision_policy.py.
+CONF_THRESHOLD = AUTO_SEND_THRESHOLD
+DISCARD_THRESHOLD = SHADOW_BORDERLINE_THRESHOLD
 
 # Session file name can be overridden:  TG_SESSION=custom python3 Botparsing.py
 session_name = os.getenv("TG_SESSION", "bot_parser")
@@ -806,8 +812,14 @@ async def process_message(event):
         # Fail-closed is safer; let subsequent checks discard if needed
         pass
 
-    # Drop if no response or not relevant, with debug explanation
-    if not cla or not cla.get("relevant", False):
+    confidence = float((cla or {}).get("confidence", 0.0) or 0.0)
+    lead_decision = decide_lead(
+        (cla or {}).get("relevant") is True,
+        confidence,
+    )
+
+    # Preserve the existing business-reject path for relevant=False.
+    if lead_decision.decision == REJECT and not (cla or {}).get("relevant", False):
         metrics['ai_dropped'] += 1
         log_info_event(
             "DROP_AI",
@@ -834,9 +846,8 @@ async def process_message(event):
             logger.error(f"Failed to write to ai_rejected.log: {e}")
         return
 
-    # Handle low-confidence yet relevant cases
-    confidence = cla.get("confidence", 0.0)
-    if confidence < DISCARD_THRESHOLD:
+    # Preserve the existing low-confidence reject path.
+    if lead_decision.decision == REJECT:
         metrics['discarded_low_confidence'] += 1
         log_info_event(
             "DISCARD",
@@ -862,25 +873,31 @@ async def process_message(event):
         except Exception as e:
             logger.error(f"Failed to write to ai_discarded.log: {e}")
         return
-    elif confidence < CONF_THRESHOLD:
-        # Gate review by AI category validity and top-level keyword presence
+    elif lead_decision.decision == SHADOW_BORDERLINE:
+        # Preserve the existing guards as telemetry reasons; shadow never delivers.
         assigned_cat = cla.get("category")
+        shadow_reason = lead_decision.reason
         if not assigned_cat or assigned_cat not in categories:
             metrics['ai_no_category'] += 1
-            logger.debug("Review drop: AI has no valid category")
-            return
-        assigned_top_kw_stems = {
-            _stem(kw) for kw in categories.get(assigned_cat, {}).get("keywords", [])
-        }
-        if assigned_top_kw_stems and not any(s in stems_in_text for s in assigned_top_kw_stems):
-            metrics['ai_cat_no_kw_match'] += 1
-            logger.debug(
-                f"Review drop: AI cat '{assigned_cat}' but no top-keyword stem present"
-            )
-            return
-        metrics['low_confidence'] += 1
+            logger.debug("Shadow drop: AI has no valid category")
+            shadow_reason = "invalid_category"
+        else:
+            assigned_top_kw_stems = {
+                _stem(kw)
+                for kw in categories.get(assigned_cat, {}).get("keywords", [])
+            }
+            if assigned_top_kw_stems and not any(
+                stem in stems_in_text for stem in assigned_top_kw_stems
+            ):
+                metrics['ai_cat_no_kw_match'] += 1
+                logger.debug(
+                    f"Shadow drop: AI cat '{assigned_cat}' but no top-keyword stem present"
+                )
+                shadow_reason = "missing_top_level_keyword"
+            else:
+                metrics['low_confidence'] += 1
         log_info_event(
-            "REVIEW",
+            "SHADOW_BORDERLINE",
             chat_id=chat_id,
             group_name=group_name,
             cat=cla.get('category'),
@@ -888,56 +905,34 @@ async def process_message(event):
             msg=text[:180],
             extra=f"exp='{cla.get('explanation')}'",
         )
-        
-        # Initialize variables that will be used later
-        ts = now_istanbul().strftime("%m-%d %H:%M")
-        # Build message link for supergroups
-        if str(chat_id).startswith("-100"):
-            short = str(chat_id)[4:]
-            link = f"https://t.me/c/{short}/{event.id}"
-        else:
-            link = ""
-        
-        # Admin review (optional via env)
-        if os.getenv("ENABLE_ADMIN_REVIEW", "1") == "1":
-            # Append to ai_review.log for human check
-            try:
-                with open("ai_review.log", "a", encoding="utf-8") as lf:
-                    lf.write(
-                        f"{ts} | {chat_id} ({group_name}) | {text} | "
-                        f"relevant:{cla.get('relevant')}, "
-                        f"category:{cla.get('category')}, "
-                        f"region:{cla.get('region')}, "
-                        f"explanation:{cla.get('explanation')}, "
-                        f"confidence:{confidence}\n"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to write to ai_review.log: {e}")
-            # Send to admin for review
-            try:
-                from review_handler import send_review_to_admin
-                asyncio.create_task(send_review_to_admin({
-                    "timestamp": ts,
-                    "chat_info": f"{chat_id} ({group_name})",
-                    "text": text,
-                    "details": f"relevant:{cla.get('relevant')}, "
-                               f"category:{cla.get('category')}, "
-                               f"region:{cla.get('region')}, "
-                               f"explanation:{cla.get('explanation')}, "
-                               f"confidence:{confidence}",
-                    "link": link,
-                    "sender_username": sender_username,
-                    "sender_id": sender_id,
-                    "category": cla.get('category'),
-                    "region": cla.get('region'),
-                    "regions": sorted(candidate_regions),
-                    "subcategory": cla.get('subcategory'),
-                    "confidence": confidence,
-                    "explanation": cla.get('explanation'),
-                    "event_id": message_queue.build_delivery_event_id(chat_id, event.id),
-                }))
-            except Exception as e:
-                logger.error(f"Failed to send review to admin: {e}")
+        config_payload = json.dumps(
+            categories,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        await message_queue.record_shadow_decision(
+            event_id=message_queue.build_delivery_event_id(chat_id, event.id),
+            category=cla.get("category"),
+            subcategory=cla.get("subcategory"),
+            location=cla.get("region"),
+            raw_confidence=cla.get("raw_confidence", confidence),
+            calibrated_confidence=confidence,
+            decision=lead_decision.decision,
+            reason=shadow_reason,
+            model=os.getenv("OPENAI_MODEL", "gpt-5-nano"),
+            prompt_id=(
+                os.getenv("OPENAI_PROMPT_ID")
+                or os.getenv("OPENAI_PROMPT_TEMPLATE_ID")
+                or "embedded"
+            ),
+            prompt_version=os.getenv("OPENAI_PROMPT_VERSION"),
+            config_version=(
+                os.getenv("LEAD_CONFIG_VERSION")
+                or hashlib.sha1(config_payload.encode("utf-8")).hexdigest()[:12]
+            ),
+            policy_version=POLICY_VERSION,
+        )
         return
 
     # --- FINAL CATEGORY FILTER: строго только твои категории ---

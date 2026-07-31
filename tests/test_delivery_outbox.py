@@ -116,7 +116,7 @@ async def test_pass_outbox_migration_is_idempotent(
         )
         assert await cursor.fetchone() == ("delivery_outbox",)
         cursor = await db.execute("SELECT version FROM schema_migrations ORDER BY version")
-        assert [row[0] for row in await cursor.fetchall()] == [1, 2, 3]
+        assert [row[0] for row in await cursor.fetchall()] == [1, 2, 3, 4]
 
 
 @pytest.mark.correct

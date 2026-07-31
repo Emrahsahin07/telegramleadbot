@@ -85,6 +85,27 @@ async def init_db():
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_decisions (
+                event_id TEXT PRIMARY KEY,
+                category TEXT NULL,
+                subcategory TEXT NULL,
+                location TEXT NULL,
+                raw_confidence REAL NULL,
+                calibrated_confidence REAL NOT NULL,
+                decision TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                model TEXT NULL,
+                prompt_id TEXT NULL,
+                prompt_version TEXT NULL,
+                config_version TEXT NULL,
+                policy_version TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
         queue_columns = {
             row[1] for row in await (await db.execute("PRAGMA table_info(queue)")).fetchall()
@@ -176,6 +197,12 @@ async def init_db():
             ON delivery_outbox(status, next_attempt_at, lease_until, id)
             """
         )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_shadow_decisions_created
+            ON shadow_decisions(created_at)
+            """
+        )
         await db.executemany(
             """
             INSERT OR IGNORE INTO schema_migrations(version, name)
@@ -185,6 +212,7 @@ async def init_db():
                 (1, "legacy_queue_additive_columns"),
                 (2, "delivery_outbox"),
                 (3, "fenced_leases_and_payload_version"),
+                (4, "shadow_borderline_telemetry"),
             ],
         )
 
@@ -209,6 +237,84 @@ async def init_db():
             logger.info("🧹 Очередь очищена по флагу CLEAR_QUEUE_ON_START=1")
         except Exception as e:
             logger.error(f"Не удалось очистить очередь: {e}")
+
+
+async def record_shadow_decision(
+    *,
+    event_id: Union[int, str],
+    category: Optional[str],
+    subcategory: Optional[str],
+    location: Optional[str],
+    raw_confidence: Optional[float],
+    calibrated_confidence: float,
+    decision: str,
+    reason: str,
+    model: Optional[str],
+    prompt_id: Optional[str],
+    prompt_version: Optional[str],
+    config_version: Optional[str],
+    policy_version: str,
+    manager: Optional[SafeDatabaseManager] = None,
+) -> None:
+    """Durably upsert one privacy-minimal shadow decision per Telegram event."""
+    async with (manager or db_manager).get_connection() as db:
+        await db.execute(
+            """
+            INSERT INTO shadow_decisions(
+                event_id, category, subcategory, location,
+                raw_confidence, calibrated_confidence,
+                decision, reason, model, prompt_id, prompt_version,
+                config_version, policy_version, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(event_id) DO UPDATE SET
+                category = excluded.category,
+                subcategory = excluded.subcategory,
+                location = excluded.location,
+                raw_confidence = excluded.raw_confidence,
+                calibrated_confidence = excluded.calibrated_confidence,
+                decision = excluded.decision,
+                reason = excluded.reason,
+                model = excluded.model,
+                prompt_id = excluded.prompt_id,
+                prompt_version = excluded.prompt_version,
+                config_version = excluded.config_version,
+                policy_version = excluded.policy_version,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                str(event_id),
+                category,
+                subcategory,
+                location,
+                raw_confidence,
+                float(calibrated_confidence),
+                decision,
+                reason,
+                model,
+                prompt_id,
+                prompt_version,
+                config_version,
+                policy_version,
+            ),
+        )
+        await db.commit()
+
+
+async def get_shadow_decision(
+    event_id: Union[int, str],
+    *,
+    manager: Optional[SafeDatabaseManager] = None,
+) -> Optional[Dict[str, Any]]:
+    async with (manager or db_manager).get_connection() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM shadow_decisions WHERE event_id = ?",
+            (str(event_id),),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
 
 async def create_delivery_outbox_entries(

@@ -190,6 +190,7 @@ async def test_pass_ai_technical_error_retries_then_dies_at_queue_budget_after_r
 
     assert dead_row[1] == 2
     assert "AI unavailable" in dead_row[2]
+    assert await message_queue.get_shadow_decision("-100123:10") is None
 
 
 @pytest.mark.correct
