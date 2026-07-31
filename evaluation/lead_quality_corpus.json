@@ -13,7 +13,7 @@
   {"id":"short_taxi","text":"Такси Анталия?","title":"Общий чат","relevant":true,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
   {"id":"short_electrician","text":"Электрик? Анталия","title":"Общий чат","relevant":true,"category":"услуги_мастеров","subcategory":"электрика","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
   {"id":"short_taxi_group_location","text":"Такси?","title":"Анталия чат","relevant":true,"category":"трансфер","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
-  {"id":"borderline_realty","text":"Квартира Анталия?","title":"Общий чат","relevant":true,"category":"недвижимость","location":["Анталия"],"should_reach_ai":true,"expected_decision":"shadow_borderline","confidence":0.65},
+  {"id":"borderline_realty","text":"Квартира Анталия?","title":"Общий чат","relevant":true,"category":"недвижимость","location":["Анталия"],"should_reach_ai":true,"expected_decision":"reject","confidence":0.65},
 
   {"id":"group_location_only","text":"Нужна уборка квартиры завтра","title":"Анталия общение","relevant":true,"category":"клининг","location":["Анталия"],"should_reach_ai":true,"expected_decision":"auto_send","confidence":0.92},
   {"id":"missing_location","text":"Нужен трансфер завтра утром","title":"Общий чат","relevant":true,"category":"трансфер","location":[],"should_reach_ai":false,"expected_decision":"reject","confidence":0.92},

@@ -586,7 +586,12 @@ def apply_overrides(cla, lower_text, category_heuristic):
         "ищу квартиру", "ищем квартиру", "ищет квартиру",
         "короткий срок", "на месяц", "на 1 месяц", "на один месяц"
     ]
-    if any(w in lower for w in rental_signals) or ("квартир" in lower and any(w in lower for w in ["ищу", "ищем", "ищет"])):
+    media_context_terms = ("видео", "ролик", "фильм", "сюжет", "съёмка", "съемка", "фото")
+    has_media_context = any(term in lower for term in media_context_terms)
+    has_rental_signal = any(w in lower for w in rental_signals) or (
+        "квартир" in lower and any(w in lower for w in ["ищу", "ищем", "ищет"])
+    )
+    if has_rental_signal and not has_media_context:
         cla["relevant"] = True
         cla["category"] = cla.get("category") or "недвижимость"
         if not cla.get("subcategory"):
